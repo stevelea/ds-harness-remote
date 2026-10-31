@@ -1800,6 +1800,43 @@ Minimum version required to store current data is: ` + bestVersion + `.
     remoteNetworkTurn: "TURN",
     remoteNetworkRelay: "Relay",
     remoteNetworkLan: "LAN",
+    remoteNetworkDirect: "Direct",
+    remoteProgressProbeDirect: "Connecting over Tailscale",
+    remoteProgressProbeDirectDetail: "Opening an encrypted channel to the pinned Host over your tailnet.",
+    connectionRouteDirect: "Tailscale network",
+    connectionRouteDirectDetail: "Serverless encrypted transfer inside your tailnet",
+    remoteDirectHosts: "Direct (Tailscale)",
+    remoteDirectHint: "Connect without the Server over your tailnet. The Host must already be authorized through the Server.",
+    remoteDirectEmpty: "No Direct hosts saved yet.",
+    remoteDirectAdd: "Add Direct host",
+    remoteDirectChooseHost: "Authorized Host",
+    remoteDirectEndpoint: "MagicDNS name or tailnet address",
+    remoteDirectEndpointPlaceholder: "studio.tailnet-name.ts.net:47400",
+    remoteDirectAddSave: "Save Direct host",
+    remoteDirectNoCandidates: "Authorize a Host through the Server before saving a Direct address.",
+    remoteDirectSaved: "Direct host saved.",
+    remoteDirectRemoved: "Direct host removed.",
+    remoteDirectHostRequired: "Choose an authorized Host.",
+    remoteDirectEndpointRequired: "Enter the Host MagicDNS name or tailnet address.",
+    remoteDirectConnect: "Connect",
+    remoteDirectRemove: "Remove",
+    directTailscale: "Direct over Tailscale",
+    directTailscaleHint: "Let trusted clients reach this Host over your tailnet without the Server. The listener binds only Tailscale addresses.",
+    directAuthorizedHint: "Clients must be authorized through the Server first. Turning this off disables the Direct path immediately.",
+    directPort: "Direct port",
+    directSave: "Save Direct settings",
+    directSaved: "Direct settings saved.",
+    directRunning: "Listening",
+    directStopped: "Not listening",
+    directEndpoints: "Detected Tailscale endpoints",
+    directNoEndpoints: "No Tailscale endpoint was detected yet.",
+    directTailscaleMissing: "Tailscale was not detected on this Host.",
+    directTailscaleDetectionFailed: "Tailscale detection failed on this Host.",
+    directTailscaleBackend: "Tailscale state: {state}",
+    directBindFailed: "The Direct listener could not bind a Tailscale address.",
+    directAddressNotTailnet: "An address is not a Tailscale address.",
+    directListenerError: "Direct listener error: {error}",
+    directPortInvalid: "Enter a Direct port between 1024 and 65535.",
     remoteNetworkOffline: "Disconnected",
     remoteLinkEncrypted: "End-to-end encrypted",
     connectionRouteTitle: "Connection route",
@@ -2076,6 +2113,43 @@ Minimum version required to store current data is: ` + bestVersion + `.
     remoteNetworkTurn: "TURN",
     remoteNetworkRelay: "\u4E2D\u7EE7",
     remoteNetworkLan: "\u5C40\u57DF\u7F51",
+    remoteNetworkDirect: "\u76F4\u8FDE",
+    remoteProgressProbeDirect: "\u6B63\u5728\u901A\u8FC7 Tailscale \u76F4\u8FDE",
+    remoteProgressProbeDirectDetail: "\u6B63\u5728\u901A\u8FC7 Tailscale \u7F51\u7EDC\u4E0E\u5DF2\u56FA\u5B9A\u7684 Host \u5EFA\u7ACB\u52A0\u5BC6\u901A\u9053\u3002",
+    connectionRouteDirect: "Tailscale \u7F51\u7EDC",
+    connectionRouteDirectDetail: "\u5728 Tailscale \u7F51\u7EDC\u5185\u76F4\u63A5\u8F6C\u53D1\u52A0\u5BC6\u6570\u636E",
+    remoteDirectHosts: "\u76F4\u8FDE\uFF08Tailscale\uFF09",
+    remoteDirectHint: "\u901A\u8FC7 Tailscale \u7F51\u7EDC\u7ED5\u8FC7 Server \u8FDE\u63A5\u3002Host \u5FC5\u987B\u5DF2\u5728 Server \u4E0A\u5B8C\u6210\u6388\u6743\u3002",
+    remoteDirectEmpty: "\u8FD8\u6CA1\u6709\u4FDD\u5B58\u76F4\u8FDE\u4E3B\u673A\u3002",
+    remoteDirectAdd: "\u6DFB\u52A0\u76F4\u8FDE\u4E3B\u673A",
+    remoteDirectChooseHost: "\u5DF2\u6388\u6743 Host",
+    remoteDirectEndpoint: "MagicDNS \u540D\u79F0\u6216 Tailscale \u5730\u5740",
+    remoteDirectEndpointPlaceholder: "studio.tailnet-name.ts.net:47400",
+    remoteDirectAddSave: "\u4FDD\u5B58\u76F4\u8FDE\u4E3B\u673A",
+    remoteDirectNoCandidates: "\u8BF7\u5148\u5728 Server \u4E0A\u6388\u6743 Host\uFF0C\u518D\u4FDD\u5B58\u76F4\u8FDE\u5730\u5740\u3002",
+    remoteDirectSaved: "\u76F4\u8FDE\u4E3B\u673A\u5DF2\u4FDD\u5B58\u3002",
+    remoteDirectRemoved: "\u76F4\u8FDE\u4E3B\u673A\u5DF2\u79FB\u9664\u3002",
+    remoteDirectHostRequired: "\u8BF7\u9009\u62E9\u5DF2\u6388\u6743\u7684 Host\u3002",
+    remoteDirectEndpointRequired: "\u8BF7\u8F93\u5165 Host \u7684 MagicDNS \u540D\u79F0\u6216 Tailscale \u5730\u5740\u3002",
+    remoteDirectConnect: "\u8FDE\u63A5",
+    remoteDirectRemove: "\u79FB\u9664",
+    directTailscale: "Tailscale \u76F4\u8FDE",
+    directTailscaleHint: "\u5141\u8BB8\u53D7\u4FE1\u4EFB\u7684\u5BA2\u6237\u7AEF\u901A\u8FC7 Tailscale \u7F51\u7EDC\u7ED5\u8FC7 Server \u8BBF\u95EE\u6B64 Host\u3002\u76D1\u542C\u5668\u53EA\u7ED1\u5B9A Tailscale \u5730\u5740\u3002",
+    directAuthorizedHint: "\u5BA2\u6237\u7AEF\u5FC5\u987B\u5148\u5728 Server \u4E0A\u5B8C\u6210\u6388\u6743\uFF1B\u5173\u95ED\u540E\u76F4\u8FDE\u8DEF\u5F84\u7ACB\u5373\u505C\u7528\u3002",
+    directPort: "\u76F4\u8FDE\u7AEF\u53E3",
+    directSave: "\u4FDD\u5B58\u76F4\u8FDE\u8BBE\u7F6E",
+    directSaved: "\u76F4\u8FDE\u8BBE\u7F6E\u5DF2\u4FDD\u5B58\u3002",
+    directRunning: "\u6B63\u5728\u76D1\u542C",
+    directStopped: "\u672A\u76D1\u542C",
+    directEndpoints: "\u68C0\u6D4B\u5230\u7684 Tailscale \u5730\u5740",
+    directNoEndpoints: "\u5C1A\u672A\u68C0\u6D4B\u5230 Tailscale \u5730\u5740\u3002",
+    directTailscaleMissing: "\u6B64 Host \u672A\u68C0\u6D4B\u5230 Tailscale\u3002",
+    directTailscaleDetectionFailed: "\u6B64 Host \u7684 Tailscale \u68C0\u6D4B\u5931\u8D25\u3002",
+    directTailscaleBackend: "Tailscale \u72B6\u6001\uFF1A{state}",
+    directBindFailed: "\u76F4\u8FDE\u76D1\u542C\u5668\u65E0\u6CD5\u7ED1\u5B9A Tailscale \u5730\u5740\u3002",
+    directAddressNotTailnet: "\u8BE5\u5730\u5740\u4E0D\u662F Tailscale \u5730\u5740\u3002",
+    directListenerError: "\u76F4\u8FDE\u76D1\u542C\u5668\u9519\u8BEF\uFF1A{error}",
+    directPortInvalid: "\u8BF7\u8F93\u5165 1024 \u5230 65535 \u4E4B\u95F4\u7684\u76F4\u8FDE\u7AEF\u53E3\u3002",
     remoteNetworkOffline: "\u5DF2\u65AD\u5F00",
     remoteLinkEncrypted: "\u7AEF\u5230\u7AEF\u52A0\u5BC6",
     connectionRouteTitle: "\u8FDE\u63A5\u7EBF\u8DEF",
@@ -2200,15 +2274,16 @@ Minimum version required to store current data is: ` + bestVersion + `.
     return value.length <= 14 ? value : `${value.slice(0, 8)}\u2026${value.slice(-4)}`;
   }
   function transportLabel(value, t) {
-    return t(value === "lan" ? "remoteNetworkLan" : value === "p2p" ? "remoteNetworkP2p" : value === "turn" ? "remoteNetworkTurn" : "remoteNetworkRelay");
+    return t(value === "direct" ? "remoteNetworkDirect" : value === "lan" ? "remoteNetworkLan" : value === "p2p" ? "remoteNetworkP2p" : value === "turn" ? "remoteNetworkTurn" : "remoteNetworkRelay");
   }
   function transportDiagnosticLabel(value) {
-    return value === "lan" ? "LAN" : value === "p2p" ? "P2P" : value === "turn" ? "TURN" : "Relay";
+    return value === "direct" ? "Direct" : value === "lan" ? "LAN" : value === "p2p" ? "P2P" : value === "turn" ? "TURN" : "Relay";
   }
   function transportProgressCopy(value) {
-    return value === "lan" ? { label: "remoteProgressProbeLan", detail: "remoteProgressProbeLanDetail" } : value === "p2p" ? { label: "remoteProgressProbeP2p", detail: "remoteProgressProbeP2pDetail" } : value === "turn" ? { label: "remoteProgressProbeTurn", detail: "remoteProgressProbeTurnDetail" } : { label: "remoteProgressProbeRelay", detail: "remoteProgressProbeRelayDetail" };
+    return value === "direct" ? { label: "remoteProgressProbeDirect", detail: "remoteProgressProbeDirectDetail" } : value === "lan" ? { label: "remoteProgressProbeLan", detail: "remoteProgressProbeLanDetail" } : value === "p2p" ? { label: "remoteProgressProbeP2p", detail: "remoteProgressProbeP2pDetail" } : value === "turn" ? { label: "remoteProgressProbeTurn", detail: "remoteProgressProbeTurnDetail" } : { label: "remoteProgressProbeRelay", detail: "remoteProgressProbeRelayDetail" };
   }
   function statusTransportPreference(status) {
+    if (status?.transport === "Direct") return "direct";
     if (status?.transport === "LAN") return "lan";
     if (status?.transport === "P2P") return "p2p";
     if (status?.transport === "TURN") return "turn";
@@ -2278,10 +2353,14 @@ Minimum version required to store current data is: ` + bestVersion + `.
   }
   function formatPlatform(value) {
     let normalized = value.toLowerCase();
-    return normalized === "darwin" || normalized === "macos" ? "macOS" : normalized === "win32" || normalized === "windows" ? "Windows" : normalized === "linux" ? "Linux" : normalized === "android" ? "Android" : value;
+    return normalized === "tailscale" ? "Tailscale" : normalized === "darwin" || normalized === "macos" ? "macOS" : normalized === "win32" || normalized === "windows" ? "Windows" : normalized === "linux" ? "Linux" : normalized === "android" ? "Android" : value;
   }
   function connectedClientModeLabel(mode, t) {
-    return t(mode === "LAN" ? "remoteNetworkLan" : mode === "P2P" ? "remoteNetworkP2p" : mode === "TURN" ? "remoteNetworkTurn" : mode === "Relay" ? "remoteNetworkRelay" : "connected");
+    return t(mode === "Direct" ? "remoteNetworkDirect" : mode === "LAN" ? "remoteNetworkLan" : mode === "P2P" ? "remoteNetworkP2p" : mode === "TURN" ? "remoteNetworkTurn" : mode === "Relay" ? "remoteNetworkRelay" : "connected");
+  }
+  function directStatusErrorLabel(code, t) {
+    if (!(code === void 0 || code === ""))
+      return code === "TAILSCALE_NOT_DETECTED" ? t("directTailscaleMissing") : code === "TAILSCALE_DETECTION_FAILED" ? t("directTailscaleDetectionFailed") : code === "DIRECT_BIND_FAILED" || code === "DIRECT_UNAVAILABLE" || code === "DIRECT_START_FAILED" ? t("directBindFailed") : code === "DIRECT_ADDRESS_NOT_TAILNET" ? t("directAddressNotTailnet") : t("directListenerError", { error: code });
   }
 
   // src/client/header.ts
@@ -2351,7 +2430,7 @@ Minimum version required to store current data is: ` + bestVersion + `.
         } finally {
           setBusy(!1);
         }
-      }, transport = status.network?.webRtc?.mode ?? status.transport ?? "Disconnected", networkLabel = t(transport === "P2P" ? "remoteNetworkP2p" : transport === "TURN" ? "remoteNetworkTurn" : transport === "Relay" ? "remoteNetworkRelay" : transport === "LAN" ? "remoteNetworkLan" : "remoteNetworkOffline"), networkOnline = status.connected === !0 && transport !== "Disconnected", routeVia = t(transport === "P2P" ? "connectionRouteP2p" : transport === "TURN" ? "connectionRouteTurn" : transport === "Relay" ? "connectionRouteRelay" : "connectionRouteLan"), routeViaDetail = t(transport === "P2P" ? "connectionRouteP2pDetail" : transport === "TURN" ? "connectionRouteTurnDetail" : transport === "Relay" ? "connectionRouteRelayDetail" : "connectionRouteLanDetail"), network = status.network, webRtc = network?.webRtc, controlStateLabel = network?.controlChannelState === "connecting" ? t("controlStateConnecting") : network?.controlChannelState === "open" ? t("controlStateOpen") : network?.controlChannelState === "closing" ? t("controlStateClosing") : t("controlStateClosed"), detailValue = (value) => value === void 0 || value === "" ? t("notProvided") : String(value), candidateLabel = (value) => value === "host" ? t("candidateHost") : value === "srflx" ? t("candidateSrflx") : value === "prflx" ? t("candidatePrflx") : value === "relay" ? t("candidateRelay") : detailValue(value), fact = (label, value, mono = !1) => React.createElement(
+      }, transport = status.network?.webRtc?.mode ?? status.transport ?? "Disconnected", networkLabel = t(transport === "Direct" ? "remoteNetworkDirect" : transport === "P2P" ? "remoteNetworkP2p" : transport === "TURN" ? "remoteNetworkTurn" : transport === "Relay" ? "remoteNetworkRelay" : transport === "LAN" ? "remoteNetworkLan" : "remoteNetworkOffline"), networkOnline = status.connected === !0 && transport !== "Disconnected", routeVia = t(transport === "Direct" ? "connectionRouteDirect" : transport === "P2P" ? "connectionRouteP2p" : transport === "TURN" ? "connectionRouteTurn" : transport === "Relay" ? "connectionRouteRelay" : "connectionRouteLan"), routeViaDetail = t(transport === "Direct" ? "connectionRouteDirectDetail" : transport === "P2P" ? "connectionRouteP2pDetail" : transport === "TURN" ? "connectionRouteTurnDetail" : transport === "Relay" ? "connectionRouteRelayDetail" : "connectionRouteLanDetail"), network = status.network, webRtc = network?.webRtc, controlStateLabel = network?.controlChannelState === "connecting" ? t("controlStateConnecting") : network?.controlChannelState === "open" ? t("controlStateOpen") : network?.controlChannelState === "closing" ? t("controlStateClosing") : t("controlStateClosed"), detailValue = (value) => value === void 0 || value === "" ? t("notProvided") : String(value), candidateLabel = (value) => value === "host" ? t("candidateHost") : value === "srflx" ? t("candidateSrflx") : value === "prflx" ? t("candidatePrflx") : value === "relay" ? t("candidateRelay") : detailValue(value), fact = (label, value, mono = !1) => React.createElement(
         "div",
         null,
         React.createElement("dt", null, label),
@@ -2606,12 +2685,13 @@ Minimum version required to store current data is: ` + bestVersion + `.
   }
 
   // src/client/settings.ts
+  var DIRECT_PORT_FALLBACK = 47400;
   function createRemotePluginOptions(React) {
     function RemotePluginOptions(props) {
-      let { t } = props, [open, setOpen] = React.useState(props.view === "page"), [serverUrl, setServerUrl] = React.useState(""), [remoteToolsBusy, setRemoteToolsBusy] = React.useState(!1), [remoteToolsEnabled, setRemoteToolsEnabled] = React.useState(!0), role = "host", [associations, setAssociations] = React.useState({}), [loaded, setLoaded] = React.useState(!1), [writable, setWritable] = React.useState(!1), [busy, setBusy] = React.useState(!1), [terminalEnabled, setTerminalEnabled] = React.useState(!1), [terminalBusy, setTerminalBusy] = React.useState(!1), [acpBackends, setAcpBackends] = React.useState([]), [acpAvailability, setAcpAvailability] = React.useState({}), [acpChecking, setAcpChecking] = React.useState({}), [acpCheckResults, setAcpCheckResults] = React.useState({}), [reconnectBusy, setReconnectBusy] = React.useState(!1), [hostStatus, setHostStatus] = React.useState(void 0), [hostName, setHostName] = React.useState(""), [hostDeviceId, setHostDeviceId] = React.useState(""), [notice, setNotice] = React.useState(void 0), [error, setError] = React.useState(void 0), [settingsView, setSettingsView] = React.useState(void 0), associationReadRun = React.useRef(0), association = associations.client ?? associations.host, applyAssociations = (view) => {
+      let { t } = props, [open, setOpen] = React.useState(props.view === "page"), [serverUrl, setServerUrl] = React.useState(""), [remoteToolsBusy, setRemoteToolsBusy] = React.useState(!1), [remoteToolsEnabled, setRemoteToolsEnabled] = React.useState(!0), role = "host", [associations, setAssociations] = React.useState({}), [loaded, setLoaded] = React.useState(!1), [writable, setWritable] = React.useState(!1), [busy, setBusy] = React.useState(!1), [terminalEnabled, setTerminalEnabled] = React.useState(!1), [terminalBusy, setTerminalBusy] = React.useState(!1), [directEnabled, setDirectEnabled] = React.useState(!1), [directPort, setDirectPort] = React.useState(String(DIRECT_PORT_FALLBACK)), [directStatus, setDirectStatus] = React.useState(void 0), [directBusy, setDirectBusy] = React.useState(!1), [acpBackends, setAcpBackends] = React.useState([]), [acpAvailability, setAcpAvailability] = React.useState({}), [acpChecking, setAcpChecking] = React.useState({}), [acpCheckResults, setAcpCheckResults] = React.useState({}), [reconnectBusy, setReconnectBusy] = React.useState(!1), [hostStatus, setHostStatus] = React.useState(void 0), [hostName, setHostName] = React.useState(""), [hostDeviceId, setHostDeviceId] = React.useState(""), [notice, setNotice] = React.useState(void 0), [error, setError] = React.useState(void 0), [settingsView, setSettingsView] = React.useState(void 0), associationReadRun = React.useRef(0), association = associations.client ?? associations.host, applyAssociations = (view) => {
         setAssociations(view.associations ?? (view.association === void 0 ? {} : { host: view.association }));
       }, applyView = (view, updateAssociations = !0) => {
-        setSettingsView(view), setServerUrl(view.config.serverUrl ?? "https://dsh.r2049.cn"), setTerminalEnabled(view.config.terminal?.enabled ?? !0), setRemoteToolsEnabled(view.config.remoteTools?.enabled ?? !0), setAcpBackends((view.config.acp?.backends ?? []).map((item) => ({ id: item.id, enabled: item.enabled !== !1 }))), setAcpAvailability(view.acpAvailability ?? {}), updateAssociations && applyAssociations(view), setWritable(view.writable), setLoaded(!0);
+        setSettingsView(view), setServerUrl(view.config.serverUrl ?? "https://dsh.r2049.cn"), setTerminalEnabled(view.config.terminal?.enabled ?? !0), setDirectEnabled(view.config.direct?.enabled === !0), setDirectPort(String(view.config.direct?.port ?? DIRECT_PORT_FALLBACK)), setDirectStatus(view.direct), setRemoteToolsEnabled(view.config.remoteTools?.enabled ?? !0), setAcpBackends((view.config.acp?.backends ?? []).map((item) => ({ id: item.id, enabled: item.enabled !== !1 }))), setAcpAvailability(view.acpAvailability ?? {}), updateAssociations && applyAssociations(view), setWritable(view.writable), setLoaded(!0);
       }, load = async () => {
         let run = ++associationReadRun.current, [view, status] = await Promise.all([
           props.control("settings.get"),
@@ -2696,6 +2776,34 @@ Minimum version required to store current data is: ` + bestVersion + `.
         } finally {
           setRemoteToolsBusy(!1);
         }
+      }, commitDirect = async (enabled, port, rollback) => {
+        setDirectBusy(!0), setError(void 0), setNotice(void 0);
+        try {
+          let view = await props.control("settings.direct.set", { enabled, port });
+          applyView(view), setNotice({ key: "directSaved" });
+        } catch (reason) {
+          rollback(), setError(messageOf(reason));
+        } finally {
+          setDirectBusy(!1);
+        }
+      }, parsedDirectPort = () => {
+        let port = Number(directPort.trim());
+        return Number.isSafeInteger(port) && port >= 1024 && port <= 65535 ? port : void 0;
+      }, toggleDirect = (enabled) => {
+        let port = parsedDirectPort();
+        if (port === void 0) {
+          setError(t("directPortInvalid"));
+          return;
+        }
+        setDirectEnabled(enabled), commitDirect(enabled, port, () => setDirectEnabled(!enabled));
+      }, saveDirectPort = () => {
+        let port = parsedDirectPort();
+        if (port === void 0) {
+          setError(t("directPortInvalid"));
+          return;
+        }
+        commitDirect(directEnabled, port, () => {
+        });
       }, checkAcp = async (backend) => {
         if (!acpChecking[backend]) {
           setAcpChecking((current) => ({ ...current, [backend]: !0 })), setAcpCheckResults((current) => ({ ...current, [backend]: void 0 })), setError(void 0);
@@ -2801,6 +2909,78 @@ Minimum version required to store current data is: ` + bestVersion + `.
             })
           ))
         )
+      ), directErrorCode = directStatus?.error ?? (directStatus?.tailscale.detected === !1 ? directStatus.tailscale.error ?? "TAILSCALE_NOT_DETECTED" : void 0), directStatusText = directStatus === void 0 ? t("loadingSettings") : directStatus.running ? t("directRunning") : t("directStopped"), directSetting = React.createElement(
+        "section",
+        { className: "dshRemoteDevelopmentSettings dshRemoteDirectSettings" },
+        React.createElement(
+          "div",
+          { className: "dshRemoteAuthorizationSetting" },
+          React.createElement(
+            "div",
+            null,
+            React.createElement("strong", null, t("directTailscale")),
+            React.createElement("p", null, t("directTailscaleHint")),
+            React.createElement("p", null, t("directAuthorizedHint"))
+          ),
+          React.createElement("input", {
+            type: "checkbox",
+            role: "switch",
+            checked: directEnabled,
+            disabled: busy || directBusy || !writable,
+            "aria-label": t("directTailscale"),
+            onChange: (event) => toggleDirect(event.target.checked)
+          })
+        ),
+        React.createElement(
+          "div",
+          { className: "dshRemotePathField" },
+          React.createElement("label", { htmlFor: "dsh-remote-direct-port" }, t("directPort")),
+          React.createElement(
+            "div",
+            { className: "dshRemotePortsRow" },
+            React.createElement("input", {
+              id: "dsh-remote-direct-port",
+              type: "number",
+              min: 1024,
+              max: 65535,
+              value: directPort,
+              disabled: busy || directBusy || !writable,
+              onChange: (event) => setDirectPort(event.target.value)
+            }),
+            React.createElement("button", {
+              type: "button",
+              disabled: busy || directBusy || !writable || directPort.trim() === "",
+              onClick: saveDirectPort
+            }, t("directSave"))
+          )
+        ),
+        React.createElement(
+          "div",
+          { className: "dshRemoteDirectStatus" },
+          React.createElement("i", {
+            className: directStatus?.running ? "isOn" : directErrorCode === void 0 ? "" : "isError",
+            "aria-hidden": !0
+          }),
+          React.createElement("span", null, directStatusText)
+        ),
+        !directEnabled || directStatus === void 0 || !directStatus.running ? null : React.createElement(
+          "div",
+          { className: "dshRemotePathField" },
+          React.createElement("label", null, t("directEndpoints")),
+          directStatus.endpoints.length === 0 ? React.createElement("p", null, t("directNoEndpoints")) : React.createElement(
+            "div",
+            { className: "dshRemoteDirectEndpointList" },
+            directStatus.endpoints.map((endpoint) => React.createElement("input", {
+              key: endpoint,
+              readOnly: !0,
+              value: endpoint,
+              "aria-label": t("directEndpoints"),
+              onFocus: (event) => event.target.select()
+            }))
+          )
+        ),
+        directStatus?.tailscale.detected === !1 && directStatus.tailscale.backendState !== void 0 ? React.createElement("p", { className: "dshRemoteHint" }, t("directTailscaleBackend", { state: directStatus.tailscale.backendState })) : null,
+        directErrorCode === void 0 ? null : React.createElement("p", { className: "dshRemoteError", role: "status" }, directStatusErrorLabel(directErrorCode, t))
       );
       return props.view === "summary" ? React.createElement("span", null, t("pluginDescription")) : React.createElement(
         props.view === "page" ? "div" : "li",
@@ -2863,6 +3043,7 @@ Minimum version required to store current data is: ` + bestVersion + `.
               )
             ),
             developmentSetting,
+            directSetting,
             acpSetting,
             React.createElement(
               "div",
@@ -2943,6 +3124,7 @@ Minimum version required to store current data is: ` + bestVersion + `.
               )
             ),
             developmentSetting,
+            directSetting,
             acpSetting,
             React.createElement(
               "div",
@@ -3043,6 +3225,7 @@ Minimum version required to store current data is: ` + bestVersion + `.
       '.dshRemoteHostControlToggle{display:flex;align-items:center;gap:7px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;white-space:nowrap;cursor:default}.dshRemoteHostControlToggle>input{appearance:none;box-sizing:border-box;position:relative;width:32px;height:18px;flex:0 0 auto;margin:0;border:1px solid var(--dsw-alias-label-secondary);border-radius:999px;background:var(--dsw-alias-bg-layer-3);cursor:pointer;box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l2);transition:background .16s ease-out,border-color .16s ease-out,box-shadow .16s ease-out}.dshRemoteHostControlToggle>input::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--dsw-alias-label-secondary);transition:transform .16s ease-out,background .16s ease-out}.dshRemoteHostControlToggle>input:checked{border-color:var(--dsw-alias-state-success-primary);background:var(--dsw-alias-state-success-primary);box-shadow:none}.dshRemoteHostControlToggle>input:checked::after{transform:translateX(14px);background:var(--dsw-alias-bg-layer-1)}.dshRemoteHostControlToggle>input:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}.dshRemoteHostControlToggle>input:disabled{opacity:.5;cursor:default}@media(prefers-reduced-motion:reduce){.dshRemoteHostControlToggle>input,.dshRemoteHostControlToggle>input::after{transition:none}}',
       ".dshRemoteAccountFooter{display:flex;align-items:center;justify-content:flex-start;gap:12px;border-top:1px solid var(--dsw-alias-border-l2);padding-top:14px;color:var(--dsw-alias-label-secondary);font-size:12px}.dshRemoteAccountSettings{flex:0 0 auto;border:0;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;padding:5px 0;font:inherit;line-height:1.5;white-space:nowrap}.dshRemoteAccountSettings:hover{color:var(--dsw-alias-label-primary);text-decoration:underline}.dshRemoteAccountExit{flex:0 0 auto;margin-left:auto;border:0;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;padding:5px 0;font-size:12px;line-height:1.5;white-space:nowrap}.dshRemoteAccountExit:hover:not(:disabled){color:var(--dsw-alias-label-primary);text-decoration:underline}.dshRemoteAccountExit:disabled{opacity:.5;cursor:default;text-decoration:none}",
       ".dshRemoteLocalLink{align-self:flex-start;border:0;background:transparent;color:var(--dsw-alias-label-secondary);padding:4px 0;cursor:pointer}.dshRemoteLocalLink:hover{color:var(--dsw-alias-label-primary)}",
+      ".dshRemoteDirectHosts{margin-top:20px;border-top:1px solid var(--dsw-alias-border-l2);padding-top:12px}.dshRemoteDirectHostRow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 4px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dshRemoteDirectHostRow>div:first-child{min-width:0;display:flex;flex-direction:column;gap:3px}.dshRemoteDirectHostRow strong{font-size:13px;font-weight:500}.dshRemoteDirectHostRow code{min-width:0;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary);font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:12px}.dshRemoteDirectHostRow small{color:var(--dsw-alias-label-tertiary);font-size:11px}.dshRemoteDirectHostActions{flex:0 0 auto;display:flex;gap:8px}.dshRemoteDirectHostActions>button{min-height:32px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary);padding:4px 12px;font:inherit;font-size:12px;line-height:1.4;cursor:pointer}.dshRemoteDirectHostActions>button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-label-dimmed)}.dshRemoteDirectHostActions>button:disabled{opacity:.5;cursor:default}.dshRemoteDirectAdd{display:grid;grid-template-columns:minmax(120px,.9fr) minmax(160px,1fr) auto;gap:8px;align-items:stretch;margin-top:12px}.dshRemoteDirectAdd>select,.dshRemoteDirectAdd>input{box-sizing:border-box;min-width:0;height:34px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:inherit;padding:0 10px;font:inherit;font-size:12px}.dshRemoteDirectAdd>button{min-height:34px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary);padding:0 12px;font:inherit;font-size:12px;cursor:pointer}.dshRemoteDirectAdd>button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dshRemoteDirectAdd>button:disabled{opacity:.5;cursor:default}.dshRemoteDirectAdd>.dshRemoteHint{grid-column:1/-1;margin:4px 0}.dshRemoteDirectEndpointList{display:flex;flex-direction:column;gap:8px;margin:8px 0}.dshRemoteDirectEndpointList>input{box-sizing:border-box;width:100%;height:34px;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:var(--dsw-alias-bg-layer-3);color:inherit;padding:0 12px;font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:12px}.dshRemoteDirectStatus{display:flex;align-items:center;gap:8px;margin:8px 0;color:var(--dsw-alias-label-secondary);font-size:12px}.dshRemoteDirectStatus>i{width:8px;height:8px;flex:0 0 auto;border-radius:999px;background:var(--dsw-alias-label-tertiary)}.dshRemoteDirectStatus>i.isOn{background:var(--dsw-alias-state-success-primary)}.dshRemoteDirectStatus>i.isError{background:var(--dsw-alias-state-error-primary)}@media(max-width:620px){.dshRemoteDirectAdd{grid-template-columns:1fr}.dshRemoteDirectHostRow{align-items:flex-start;flex-direction:column}.dshRemoteDirectHostActions{width:100%}.dshRemoteDirectHostActions>button{flex:1}}",
       "@keyframes dshRemotePageIn{from{opacity:0;transform:translateY(6px) scale(.99)}to{opacity:1;transform:none}}@media(prefers-reduced-motion:reduce){.dshRemotePage{animation:none}}@media(max-width:620px){.dshRemoteBackdrop{padding:12px}.dshRemotePage{max-height:calc(100vh - 24px)}.dshRemotePageHeader{gap:8px;padding:12px 16px}.dshRemotePage.hasSelectedHost .dshRemotePageBack{max-width:112px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dshRemoteSectionHeading{align-items:flex-start;flex-direction:column;gap:8px}.dshRemoteWorkspaceHeading{align-items:center;flex-direction:row}.dshRemoteSectionActions{width:100%;justify-content:space-between}.dshRemotePageBody{padding:20px 16px}.dshRemoteOpenBar{align-items:flex-end}.dshRemoteOpenBar>button{min-height:48px}}",
       ".dshRemoteBackdrop{position:fixed;inset:0;z-index:1000;background:var(--dsw-alias-bg-mask-3);display:grid;place-items:center;padding:20px;-webkit-app-region:no-drag}",
       ".dshRemoteDialog{width:min(460px,100%);max-height:80vh;overflow:auto;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l2);border-radius:14px;padding:18px;display:grid;gap:12px;box-shadow:var(--dsw-shadow-lv2)}",
@@ -3103,12 +3286,12 @@ Minimum version required to store current data is: ` + bestVersion + `.
       let { t } = props, connectionErrorMessageFor = (reason, translate) => {
         if (typeof reason == "object" && reason !== null && "code" in reason) {
           let code = reason.code;
-          if (typeof code == "string") return connectionErrorMessage(code, translate);
+          if (typeof code == "string" && !code.startsWith("DIRECT_")) return connectionErrorMessage(code, translate);
         }
         return messageOf(reason);
-      }, [open, setOpen] = React.useState(!1), [status, setStatus] = React.useState(void 0), [devices, setDevices] = React.useState([]), [selectedHost, setSelectedHost] = React.useState(void 0), [connectingHost, setConnectingHost] = React.useState(void 0), [workspaces, setWorkspaces] = React.useState([]), [codexWorkspaces, setCodexWorkspaces] = React.useState([]), [cursorWorkspaces, setCursorWorkspaces] = React.useState([]), [antigravityWorkspaces, setAntigravityWorkspaces] = React.useState([]), [piWorkspaces, setPiWorkspaces] = React.useState([]), [opencodeWorkspaces, setOpencodeWorkspaces] = React.useState([]), [claudeWorkspaces, setClaudeWorkspaces] = React.useState([]), [workspaceBackend, setWorkspaceBackend] = React.useState("harness"), [codexWorkspaceId, setCodexWorkspaceId] = React.useState(void 0), [cursorWorkspaceId, setCursorWorkspaceId] = React.useState(void 0), [antigravityWorkspaceId, setAntigravityWorkspaceId] = React.useState(void 0), [piWorkspaceId, setPiWorkspaceId] = React.useState(void 0), [opencodeWorkspaceId, setOpencodeWorkspaceId] = React.useState(void 0), [claudeWorkspaceId, setClaudeWorkspaceId] = React.useState(void 0), [directory, setDirectory] = React.useState(void 0), [path, setPath] = React.useState(""), [addingWorkspace, setAddingWorkspace] = React.useState(!1), [showAllWorkspaces, setShowAllWorkspaces] = React.useState(!1), [showAllCodexWorkspaces, setShowAllCodexWorkspaces] = React.useState(!1), [devicesOpen, setDevicesOpen] = React.useState(!1), [showAllCursorWorkspaces, setShowAllCursorWorkspaces] = React.useState(!1), [showAllAntigravityWorkspaces, setShowAllAntigravityWorkspaces] = React.useState(!1), [showAllPiWorkspaces, setShowAllPiWorkspaces] = React.useState(!1), [showAllOpencodeWorkspaces, setShowAllOpencodeWorkspaces] = React.useState(!1), [showAllClaudeWorkspaces, setShowAllClaudeWorkspaces] = React.useState(!1), workspaceListId = "dsh-remote-workspace-list", codexWorkspaceHeadingId = "dsh-remote-codex-workspace-heading", codexWorkspaceListId = "dsh-remote-codex-workspace-list", cursorWorkspaceHeadingId = "dsh-remote-cursor-workspace-heading", cursorWorkspaceListId = "dsh-remote-cursor-workspace-list", antigravityWorkspaceHeadingId = "dsh-remote-antigravity-workspace-heading", piWorkspaceHeadingId = "dsh-remote-pi-workspace-heading", opencodeWorkspaceHeadingId = "dsh-remote-opencode-workspace-heading", claudeWorkspaceHeadingId = "dsh-remote-claude-workspace-heading", antigravityWorkspaceListId = "dsh-remote-antigravity-workspace-list", piWorkspaceListId = "dsh-remote-pi-workspace-list", opencodeWorkspaceListId = "dsh-remote-opencode-workspace-list", claudeWorkspaceListId = "dsh-remote-claude-workspace-list", [busy, setBusy] = React.useState(!1), [needsAuthorization, setNeedsAuthorization] = React.useState(void 0), [email, setEmail] = React.useState(""), [password, setPassword] = React.useState(""), [loginServerUrl, setLoginServerUrl] = React.useState("https://dsh.r2049.cn"), [editingServer, setEditingServer] = React.useState(!1), [savingServer, setSavingServer] = React.useState(!1), serverDirty = loginServerUrl.trim() !== (status?.serverUrl ?? ""), [loginMethod, setLoginMethod] = React.useState("password"), loginMethodManuallySelected = React.useRef(!1), [oauthProviders, setOAuthProviders] = React.useState([]), [providersLoading, setProvidersLoading] = React.useState(!1), [providersFailed, setProvidersFailed] = React.useState(!1), [providerReload, setProviderReload] = React.useState(0), providerRequestRun = React.useRef(0), [qrSession, setQrSession] = React.useState(void 0), [qrImage, setQrImage] = React.useState(void 0), [qrExpired, setQrExpired] = React.useState(!1), [hostEmail, setHostEmail] = React.useState(""), [hostPassword, setHostPassword] = React.useState(""), [hostRegistrationCode, setHostRegistrationCode] = React.useState(""), [progress, setProgress] = React.useState(void 0), progressRun = React.useRef(0), qrFlowRun = React.useRef(0), pageRef = React.useRef(null), [notice, setNotice] = React.useState(void 0), [error, setError] = React.useState(void 0);
+      }, [open, setOpen] = React.useState(!1), [status, setStatus] = React.useState(void 0), [devices, setDevices] = React.useState([]), [directHosts, setDirectHosts] = React.useState([]), [directCandidates, setDirectCandidates] = React.useState([]), [directAddOpen, setDirectAddOpen] = React.useState(!1), [directAddHostId, setDirectAddHostId] = React.useState(""), [directAddEndpoint, setDirectAddEndpoint] = React.useState(""), [selectedHost, setSelectedHost] = React.useState(void 0), [connectingHost, setConnectingHost] = React.useState(void 0), [workspaces, setWorkspaces] = React.useState([]), [codexWorkspaces, setCodexWorkspaces] = React.useState([]), [cursorWorkspaces, setCursorWorkspaces] = React.useState([]), [antigravityWorkspaces, setAntigravityWorkspaces] = React.useState([]), [piWorkspaces, setPiWorkspaces] = React.useState([]), [opencodeWorkspaces, setOpencodeWorkspaces] = React.useState([]), [claudeWorkspaces, setClaudeWorkspaces] = React.useState([]), [workspaceBackend, setWorkspaceBackend] = React.useState("harness"), [codexWorkspaceId, setCodexWorkspaceId] = React.useState(void 0), [cursorWorkspaceId, setCursorWorkspaceId] = React.useState(void 0), [antigravityWorkspaceId, setAntigravityWorkspaceId] = React.useState(void 0), [piWorkspaceId, setPiWorkspaceId] = React.useState(void 0), [opencodeWorkspaceId, setOpencodeWorkspaceId] = React.useState(void 0), [claudeWorkspaceId, setClaudeWorkspaceId] = React.useState(void 0), [directory, setDirectory] = React.useState(void 0), [path, setPath] = React.useState(""), [addingWorkspace, setAddingWorkspace] = React.useState(!1), [showAllWorkspaces, setShowAllWorkspaces] = React.useState(!1), [showAllCodexWorkspaces, setShowAllCodexWorkspaces] = React.useState(!1), [devicesOpen, setDevicesOpen] = React.useState(!1), [showAllCursorWorkspaces, setShowAllCursorWorkspaces] = React.useState(!1), [showAllAntigravityWorkspaces, setShowAllAntigravityWorkspaces] = React.useState(!1), [showAllPiWorkspaces, setShowAllPiWorkspaces] = React.useState(!1), [showAllOpencodeWorkspaces, setShowAllOpencodeWorkspaces] = React.useState(!1), [showAllClaudeWorkspaces, setShowAllClaudeWorkspaces] = React.useState(!1), workspaceListId = "dsh-remote-workspace-list", codexWorkspaceHeadingId = "dsh-remote-codex-workspace-heading", codexWorkspaceListId = "dsh-remote-codex-workspace-list", cursorWorkspaceHeadingId = "dsh-remote-cursor-workspace-heading", cursorWorkspaceListId = "dsh-remote-cursor-workspace-list", antigravityWorkspaceHeadingId = "dsh-remote-antigravity-workspace-heading", piWorkspaceHeadingId = "dsh-remote-pi-workspace-heading", opencodeWorkspaceHeadingId = "dsh-remote-opencode-workspace-heading", claudeWorkspaceHeadingId = "dsh-remote-claude-workspace-heading", antigravityWorkspaceListId = "dsh-remote-antigravity-workspace-list", piWorkspaceListId = "dsh-remote-pi-workspace-list", opencodeWorkspaceListId = "dsh-remote-opencode-workspace-list", claudeWorkspaceListId = "dsh-remote-claude-workspace-list", [busy, setBusy] = React.useState(!1), [needsAuthorization, setNeedsAuthorization] = React.useState(void 0), [email, setEmail] = React.useState(""), [password, setPassword] = React.useState(""), [loginServerUrl, setLoginServerUrl] = React.useState("https://dsh.r2049.cn"), [editingServer, setEditingServer] = React.useState(!1), [savingServer, setSavingServer] = React.useState(!1), serverDirty = loginServerUrl.trim() !== (status?.serverUrl ?? ""), [loginMethod, setLoginMethod] = React.useState("password"), loginMethodManuallySelected = React.useRef(!1), [oauthProviders, setOAuthProviders] = React.useState([]), [providersLoading, setProvidersLoading] = React.useState(!1), [providersFailed, setProvidersFailed] = React.useState(!1), [providerReload, setProviderReload] = React.useState(0), providerRequestRun = React.useRef(0), [qrSession, setQrSession] = React.useState(void 0), [qrImage, setQrImage] = React.useState(void 0), [qrExpired, setQrExpired] = React.useState(!1), [hostEmail, setHostEmail] = React.useState(""), [hostPassword, setHostPassword] = React.useState(""), [hostRegistrationCode, setHostRegistrationCode] = React.useState(""), [progress, setProgress] = React.useState(void 0), progressRun = React.useRef(0), qrFlowRun = React.useRef(0), pageRef = React.useRef(null), [notice, setNotice] = React.useState(void 0), [error, setError] = React.useState(void 0);
       React.useEffect(() => {
-        open || (setDevicesOpen(!1), qrFlowRun.current += 1, setBusy(!1));
+        open || (setDevicesOpen(!1), setDirectAddOpen(!1), qrFlowRun.current += 1, setBusy(!1));
       }, [open]), React.useEffect(() => {
         if (!open) return;
         let frame = window.requestAnimationFrame(() => pageRef.current?.focus());
@@ -3223,17 +3406,18 @@ Minimum version required to store current data is: ` + bestVersion + `.
         className: loginMethod === `oauth:${provider.id}` ? "isActive" : "",
         disabled: busy,
         onClick: () => selectLoginMethod(`oauth:${provider.id}`)
-      }, t("providerLogin", { provider: provider.displayName })), selectHost = async (host) => {
+      }, t("providerLogin", { provider: provider.displayName })), loadHostWorkspaces = async (host, connectAction, preferredTransports) => {
         setBusy(!0), setError(void 0), setConnectingHost(host), setCodexWorkspaces([]), setCursorWorkspaces([]), setAntigravityWorkspaces([]), setPiWorkspaces([]), setOpencodeWorkspaces([]), setClaudeWorkspaces([]), setShowAllWorkspaces(!1), setShowAllCodexWorkspaces(!1), setShowAllCursorWorkspaces(!1), setShowAllAntigravityWorkspaces(!1), setShowAllPiWorkspaces(!1), setShowAllOpencodeWorkspaces(!1), setShowAllClaudeWorkspaces(!1);
         try {
           let result = await runConnectHostProgress(
-            status?.preferredTransports,
+            preferredTransports ?? status?.preferredTransports,
             host.deviceId,
             props.control,
             { label: "remoteProgressLoadingWorkspaces", detail: "remoteProgressLoadingWorkspacesDetail" },
             setProgress,
             progressRun,
             async () => {
+              await connectAction();
               let nextWorkspaces = await props.control("workspaces.list", {
                 targetDeviceId: host.deviceId
               }), [
@@ -3272,6 +3456,51 @@ Minimum version required to store current data is: ` + bestVersion + `.
           setError(connectionErrorMessageFor(reason, t));
         } finally {
           setConnectingHost(void 0), setBusy(!1);
+        }
+      }, selectHost = (host) => loadHostWorkspaces(host, async () => {
+      }), directDevice = (entry) => ({
+        deviceId: entry.hostDeviceId,
+        name: entry.hostName,
+        platform: entry.platform ?? "tailscale",
+        online: !0
+      }), connectDirectHost = async (entry) => {
+        await loadHostWorkspaces(directDevice(entry), async () => {
+          await props.control("direct.connect", { hostDeviceId: entry.hostDeviceId, endpoint: entry.endpoint });
+        }, ["direct"]);
+      }, refreshDirectHosts = async () => {
+        try {
+          let view = await props.control("direct.hosts.list");
+          setDirectHosts(view.hosts), setDirectCandidates(view.candidates);
+        } catch {
+        }
+      }, addDirectHost = async () => {
+        let hostDeviceId = directAddHostId, endpoint = directAddEndpoint.trim();
+        if (hostDeviceId === "") {
+          setError(t("remoteDirectHostRequired"));
+          return;
+        }
+        if (endpoint === "") {
+          setError(t("remoteDirectEndpointRequired"));
+          return;
+        }
+        setBusy(!0), setError(void 0), setNotice(void 0);
+        try {
+          let view = await props.control("direct.host.add", { hostDeviceId, endpoint });
+          setDirectHosts(view.hosts), setDirectCandidates(view.candidates), setDirectAddOpen(!1), setDirectAddHostId(""), setDirectAddEndpoint(""), setNotice(t("remoteDirectSaved"));
+        } catch (reason) {
+          setError(messageOf(reason));
+        } finally {
+          setBusy(!1);
+        }
+      }, removeDirectHost = async (hostDeviceId) => {
+        setBusy(!0), setError(void 0), setNotice(void 0);
+        try {
+          let view = await props.control("direct.host.remove", { hostDeviceId });
+          setDirectHosts(view.hosts), setDirectCandidates(view.candidates), setNotice(t("remoteDirectRemoved"));
+        } catch (reason) {
+          setError(messageOf(reason));
+        } finally {
+          setBusy(!1);
         }
       }, browseDirectory = async (nextPath) => {
         if (selectedHost !== void 0) {
@@ -3329,7 +3558,7 @@ Minimum version required to store current data is: ` + bestVersion + `.
           setBusy(!1);
         }
       }, show = async () => {
-        setShowAllWorkspaces(!1), setShowAllCodexWorkspaces(!1), setShowAllCursorWorkspaces(!1), setShowAllAntigravityWorkspaces(!1), setShowAllPiWorkspaces(!1), setShowAllOpencodeWorkspaces(!1), setShowAllClaudeWorkspaces(!1), setOpen(!0), await refreshRemote();
+        setShowAllWorkspaces(!1), setShowAllCodexWorkspaces(!1), setShowAllCursorWorkspaces(!1), setShowAllAntigravityWorkspaces(!1), setShowAllPiWorkspaces(!1), setShowAllOpencodeWorkspaces(!1), setShowAllClaudeWorkspaces(!1), setOpen(!0), refreshDirectHosts(), await refreshRemote();
       };
       React.useEffect(() => props.subscribeOpen(() => {
         show();
@@ -3489,7 +3718,96 @@ Minimum version required to store current data is: ` + bestVersion + `.
             ))
           )
         ) : null
-      ) : null, listedHosts = connectingHost === void 0 ? devices : [connectingHost];
+      ) : null, listedHosts = connectingHost === void 0 ? devices : [connectingHost], directAddCandidates = directCandidates.filter((candidate) => !directHosts.some((entry) => entry.hostDeviceId === candidate.hostDeviceId)), directSection = directHosts.length === 0 && directAddCandidates.length === 0 && !directAddOpen ? null : React.createElement(
+        "section",
+        {
+          className: "dshRemoteDirectHosts",
+          "aria-label": t("remoteDirectHosts")
+        },
+        React.createElement(
+          "div",
+          { className: "dshRemoteWorkspaceSourceHeading" },
+          React.createElement(
+            "span",
+            { className: "dshRemoteWorkspaceSourceText" },
+            React.createElement("strong", null, t("remoteDirectHosts"))
+          ),
+          React.createElement("button", {
+            type: "button",
+            className: "dshRemoteAddWorkspace",
+            disabled: busy,
+            title: t("remoteDirectAdd"),
+            "aria-label": t("remoteDirectAdd"),
+            onClick: () => {
+              setDirectAddOpen((current) => !current), setError(void 0);
+            }
+          }, React.createElement("svg", {
+            className: "dshRemoteAddWorkspaceIcon",
+            viewBox: "0 0 16 16",
+            "aria-hidden": !0,
+            focusable: !1
+          }, React.createElement("path", { d: "M8 3v10M3 8h10", fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round" })))
+        ),
+        React.createElement("p", { className: "dshRemoteHint" }, t("remoteDirectHint")),
+        directHosts.length === 0 ? React.createElement("p", { className: "dshRemoteHint" }, t("remoteDirectEmpty")) : directHosts.map((entry) => React.createElement(
+          "div",
+          {
+            key: entry.hostDeviceId,
+            className: "dshRemoteDirectHostRow"
+          },
+          React.createElement(
+            "div",
+            null,
+            React.createElement("strong", null, entry.hostName),
+            React.createElement("code", null, entry.endpoint),
+            entry.lastConnectedAt === void 0 ? null : React.createElement("small", null, t("lastActive", { time: formatLocalTime(entry.lastConnectedAt) }))
+          ),
+          React.createElement(
+            "div",
+            { className: "dshRemoteDirectHostActions" },
+            React.createElement("button", {
+              type: "button",
+              disabled: busy,
+              onClick: () => void connectDirectHost(entry)
+            }, t("remoteDirectConnect")),
+            React.createElement("button", {
+              type: "button",
+              disabled: busy,
+              onClick: () => void removeDirectHost(entry.hostDeviceId)
+            }, t("remoteDirectRemove"))
+          )
+        )),
+        directAddOpen ? React.createElement(
+          "div",
+          { className: "dshRemoteDirectAdd" },
+          directAddCandidates.length === 0 ? React.createElement("p", { className: "dshRemoteHint" }, t("remoteDirectNoCandidates")) : React.createElement(
+            "select",
+            {
+              value: directAddHostId,
+              disabled: busy,
+              "aria-label": t("remoteDirectChooseHost"),
+              onChange: (event) => setDirectAddHostId(event.target.value)
+            },
+            React.createElement("option", { value: "" }, t("remoteDirectChooseHost")),
+            directAddCandidates.map((candidate) => React.createElement("option", {
+              key: candidate.hostDeviceId,
+              value: candidate.hostDeviceId
+            }, candidate.platform === void 0 ? candidate.name : `${candidate.name} \xB7 ${formatPlatform(candidate.platform)}`))
+          ),
+          React.createElement("input", {
+            value: directAddEndpoint,
+            disabled: busy,
+            placeholder: t("remoteDirectEndpointPlaceholder"),
+            "aria-label": t("remoteDirectEndpoint"),
+            onChange: (event) => setDirectAddEndpoint(event.target.value)
+          }),
+          React.createElement("button", {
+            type: "button",
+            disabled: busy || directAddHostId === "" || directAddEndpoint.trim() === "",
+            onClick: () => void addDirectHost()
+          }, t("remoteDirectAddSave"))
+        ) : null
+      );
       return React.createElement(
         React.Fragment,
         null,
@@ -3835,6 +4153,7 @@ Minimum version required to store current data is: ` + bestVersion + `.
                     React.createElement("small", null, t(device.online ? "online" : "offline"))
                   )))
                 ) : null,
+                directSection,
                 React.createElement(RemoteProgressView, { progress, t }),
                 selectedHost === void 0 ? connectingHost === void 0 ? React.createElement(
                   React.Fragment,

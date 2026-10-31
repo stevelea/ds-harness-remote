@@ -9,6 +9,7 @@ import { StatusBar } from 'expo-status-bar'
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { ChatScreen } from './src/screens/chat-screen'
 import { ConnectionScreen, DeviceDetailScreen, DevicesScreen } from './src/screens/device-screens'
+import { DirectConnectScreen } from './src/screens/direct-connect-screen'
 import { AboutScreen, HomeActionsMenu, ServerSetupScreen, SettingsScreen } from './src/screens/setup-screens'
 import { WorkspacesScreen } from './src/screens/workspaces-screen'
 import { stopConnectionRecovery, useAppStore } from './src/state/store'
@@ -35,6 +36,7 @@ type Route =
   | { name: 'connecting'; deviceId: string; focusWorkspaceKey?: string; sessionId?: string }
   | { name: 'workspaces'; focusWorkspaceKey?: string; botConversationId?: string; source?: 'chat' }
   | { name: 'chat' }
+  | { name: 'direct' }
   | { name: 'settings' }
   | { name: 'about' }
 
@@ -431,9 +433,13 @@ function AppNavigator() {
         }}
       />}
       {route.name === 'chat' && <ChatScreen onBack={pop} onOpenDevices={() => reset({ name: 'devices' })} onOpenWorkspaces={focusWorkspaceKey => push({ name: 'workspaces', focusWorkspaceKey, source: 'chat' })} />}
+      {route.name === 'direct' && <DirectConnectScreen
+        onBack={routes.length > 1 ? pop : () => reset({ name: 'devices' })}
+        onConnected={() => reset({ name: 'workspaces' })}
+      />}
       {route.name === 'settings' && <SettingsScreen onBack={pop} onReset={() => reset({ name: 'server' })} />}
       {route.name === 'about' && <AboutScreen onBack={pop} />}
-      {error !== undefined && route.name !== 'connecting' && route.name !== 'chat' && (
+      {error !== undefined && route.name !== 'connecting' && route.name !== 'chat' && route.name !== 'direct' && (
         <View pointerEvents="box-none" style={[styles.globalError, { top: insets.top }]}>
           <ErrorBanner message={error} onDismiss={clearError} />
         </View>
@@ -451,6 +457,10 @@ function AppNavigator() {
               push({ name: 'devices' })
             }
           : undefined}
+        onDirect={() => {
+          setHomeMenuOpen(false)
+          push({ name: 'direct' })
+        }}
         onSettings={() => {
           setHomeMenuOpen(false)
           push({ name: 'settings' })

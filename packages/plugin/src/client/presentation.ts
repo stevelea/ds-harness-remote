@@ -49,6 +49,7 @@ function serverHostname(value: string): string {
 }
 
 export function transportLabel(value: RemoteTransportPreference, t: Translate): string {
+  if (value === 'direct') return t('remoteNetworkDirect')
   if (value === 'lan') return t('remoteNetworkLan')
   if (value === 'p2p') return t('remoteNetworkP2p')
   if (value === 'turn') return t('remoteNetworkTurn')
@@ -56,6 +57,7 @@ export function transportLabel(value: RemoteTransportPreference, t: Translate): 
 }
 
 export function transportDiagnosticLabel(value: RemoteTransportPreference): string {
+  if (value === 'direct') return 'Direct'
   if (value === 'lan') return 'LAN'
   if (value === 'p2p') return 'P2P'
   if (value === 'turn') return 'TURN'
@@ -63,6 +65,7 @@ export function transportDiagnosticLabel(value: RemoteTransportPreference): stri
 }
 
 function transportProgressCopy(value: RemoteTransportPreference): { label: LocaleKey; detail: LocaleKey } {
+  if (value === 'direct') return { label: 'remoteProgressProbeDirect', detail: 'remoteProgressProbeDirectDetail' }
   if (value === 'lan') return { label: 'remoteProgressProbeLan', detail: 'remoteProgressProbeLanDetail' }
   if (value === 'p2p') return { label: 'remoteProgressProbeP2p', detail: 'remoteProgressProbeP2pDetail' }
   if (value === 'turn') return { label: 'remoteProgressProbeTurn', detail: 'remoteProgressProbeTurnDetail' }
@@ -70,6 +73,7 @@ function transportProgressCopy(value: RemoteTransportPreference): { label: Local
 }
 
 function statusTransportPreference(status: RemoteStatus | undefined): RemoteTransportPreference | undefined {
+  if (status?.transport === 'Direct') return 'direct'
   if (status?.transport === 'LAN') return 'lan'
   if (status?.transport === 'P2P') return 'p2p'
   if (status?.transport === 'TURN') return 'turn'
@@ -179,6 +183,7 @@ export function messageOf(reason: unknown): string { return reason instanceof Er
 
 export function formatPlatform(value: string): string {
   const normalized = value.toLowerCase()
+  if (normalized === 'tailscale') return 'Tailscale'
   if (normalized === 'darwin' || normalized === 'macos') return 'macOS'
   if (normalized === 'win32' || normalized === 'windows') return 'Windows'
   if (normalized === 'linux') return 'Linux'
@@ -187,12 +192,23 @@ export function formatPlatform(value: string): string {
 }
 
 export function connectedClientModeLabel(
-  mode: 'LAN' | 'P2P' | 'TURN' | 'Relay' | undefined,
+  mode: 'LAN' | 'P2P' | 'TURN' | 'Relay' | 'Direct' | undefined,
   t: Translate,
 ): string {
+  if (mode === 'Direct') return t('remoteNetworkDirect')
   if (mode === 'LAN') return t('remoteNetworkLan')
   if (mode === 'P2P') return t('remoteNetworkP2p')
   if (mode === 'TURN') return t('remoteNetworkTurn')
   if (mode === 'Relay') return t('remoteNetworkRelay')
   return t('connected')
+}
+
+/** Localized label for a Direct listener status/error code. */
+export function directStatusErrorLabel(code: string | undefined, t: Translate): string | undefined {
+  if (code === undefined || code === '') return undefined
+  if (code === 'TAILSCALE_NOT_DETECTED') return t('directTailscaleMissing')
+  if (code === 'TAILSCALE_DETECTION_FAILED') return t('directTailscaleDetectionFailed')
+  if (code === 'DIRECT_BIND_FAILED' || code === 'DIRECT_UNAVAILABLE' || code === 'DIRECT_START_FAILED') return t('directBindFailed')
+  if (code === 'DIRECT_ADDRESS_NOT_TAILNET') return t('directAddressNotTailnet')
+  return t('directListenerError', { error: code })
 }

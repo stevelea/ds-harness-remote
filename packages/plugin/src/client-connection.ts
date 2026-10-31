@@ -1,6 +1,6 @@
 import { RemoteClientCore } from '@dsh-remote/client-core'
 import type { RtcPeerConnectionFactory } from '@dsh-remote/webrtc'
-import { AdaptiveTransport } from '@dsh-remote/webrtc'
+import { AdaptiveTransport, DirectTransport } from '@dsh-remote/webrtc'
 import { probeRemoteHostFeatures } from './client-capabilities.js'
 import type {
   ConnectedRemote,
@@ -26,6 +26,7 @@ import type { HostIdentity, IdentityStore, TrustedPeer } from './identity-store.
 import type { SafeLogger } from './logging.js'
 import type { ServerHostDevice } from './server-api.js'
 import { ClientServerApi } from './server-api.js'
+import { PLUGIN_VERSION } from './version.js'
 import type { WeriftFactoryOptions } from './werift-rtc.js'
 
 /** Collaborates with one ClientModeRuntime; never creates a second session or connection state. */
@@ -180,6 +181,78 @@ export class ClientConnection {
         progressRunId,
         ...(serverDevice.clientVersion === undefined ? {} : { clientVersion: serverDevice.clientVersion }),
         ...(serverDevice.harnessVersion === undefined ? {} : { harnessVersion: serverDevice.harnessVersion }),
+      }
+    } catch (error) {
+      this.clearConnectionProgress(progressRunId)
+      const failure = closed && closeError !== undefined ? closeError : error
+      await client?.close().catch(() => undefined)
+      throw failure
+    } finally {
+      signal?.removeEventListener('abort', onAbort)
+    }
+  }
+
+  /**
+   * Serverless Direct (Tailscale) connection. The Host identity and key are the
+   * ones pinned by the normal Server authorization; the Noise IK transcript
+   * authenticates the peer again, so the `direct.ready` claim is only a routing
+   * hint. Progress/error conventions match the Server path.
+   */
+  async connectDirect(
+    target: TrustedPeer,
+    endpoint: string,
+    signal?: AbortSignal,
+  ): Promise<ConnectedRemote> {
+    signal?.throwIfAborted()
+    const progressRunId = this.context.connectionProgressRun + 1
+    this.context.connectionProgressRun = progressRunId
+    this.context.connectionProgress = { runId: progressRunId, targetDeviceId: target.deviceId, phase: 'authorizing-peer' }
+    const identity = this.context.requireIdentity()
+    let client: RemoteClientCore | undefined
+    let closed = false
+    let closeError: Error | undefined
+    const onAbort = () => { void client?.close().catch(() => undefined) }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    try {
+      const transport = new DirectTransport(DirectTransport.endpointUrl(endpoint), {
+        deviceId: identity.deviceId,
+        hostDeviceId: target.deviceId,
+        clientVersion: PLUGIN_VERSION,
+        ...(signal === undefined ? {} : { signal }),
+      })
+      client = new RemoteClientCore(new ClientSecureTransport(transport, identity, target), 60_000)
+      closed = false
+      closeError = undefined
+      client.onClose(error => { closed = true; closeError = error })
+      const attemptClient = client
+      this.updateConnectionProgress(progressRunId, 'probing', ['direct'])
+      // DirectTransport resolves after `direct.ready`; ClientSecureTransport
+      // then completes Noise IK inside the same connect() call.
+      await attemptClient.connect()
+      signal?.throwIfAborted()
+      if (!attemptClient.getStats().connected) {
+        throw new ClientModeError('TRANSPORT_CLOSED', 'The Direct Host transport closed before it became ready.', true)
+      }
+      if (!closed) this.updateConnectionProgress(progressRunId, 'connected', ['direct'])
+      const details = await transport.connectionDetails().catch(() => undefined)
+      this.context.logger.info('remote Harness direct transport ready', {
+        targetDeviceId: shortId(target.deviceId),
+        transport: attemptClient.getStats().mode,
+        ...(details === undefined ? {} : {
+          heartbeatIntervalMs: details.heartbeatIntervalMs,
+          directCapabilities: details.capabilities.length,
+        }),
+      })
+      const features = await probeRemoteHostFeatures(attemptClient)
+      signal?.throwIfAborted()
+      if (closed) throw closeError ?? new ClientModeError('TRANSPORT_CLOSED', 'The Direct connection closed during discovery.', true)
+      return {
+        client: attemptClient,
+        target,
+        transport,
+        features,
+        progressRunId,
+        direct: true,
       }
     } catch (error) {
       this.clearConnectionProgress(progressRunId)

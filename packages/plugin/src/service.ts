@@ -23,6 +23,7 @@ import {
   type OAuthQrSession,
 } from './server-api.js'
 import { HostServerConnection } from './server-connection.js'
+import { DirectHostListener, type DirectHostStatus } from './direct-host-listener.js'
 import { ServerCredentialStore } from './server-credentials.js'
 import { HarnessRemoteBridge } from './harness-remote-bridge.js'
 import type { PluginRouteDispatcher } from './plugin-route-bridge.js'
@@ -44,7 +45,7 @@ export interface HostConnectedClient {
   deviceId: string
   name: string
   platform?: string
-  mode?: 'LAN' | 'P2P' | 'TURN' | 'Relay'
+  mode?: 'LAN' | 'P2P' | 'TURN' | 'Relay' | 'Direct'
 }
 
 export interface HostRemoteStatus {
@@ -58,6 +59,8 @@ export interface HostRemoteStatus {
   authorized: boolean
   accountRequired: boolean
   connectedClients: HostConnectedClient[]
+  /** Opt-in serverless Tailscale listener state. */
+  direct?: DirectHostStatus
 }
 
 export class HostPluginRuntime {
@@ -69,6 +72,8 @@ export class HostPluginRuntime {
   private identity?: HostIdentity
   private readonly serverApi?: HostServerApi
   private serverConnection?: HostServerConnection
+  private directListener?: DirectHostListener
+  private directError?: string
   private harnessVersion?: string
   private closed = false
   private readonly codex: CodexRemoteDomain
@@ -201,6 +206,7 @@ export class HostPluginRuntime {
       this.serverConnection = this.createServerConnection(this.identity)
       if (this.config.hostControl?.enabled !== false) this.serverConnection.start()
     }
+    if (this.config.direct.enabled && this.config.role !== 'client') await this.startDirect()
   }
 
   currentIdentity(): HostIdentity {
@@ -229,7 +235,66 @@ export class HostPluginRuntime {
       authorized: authorization !== undefined,
       accountRequired: error === 'ACCOUNT_AUTH_REQUIRED' || error === 'AUTH_REQUIRED' || error === 'AUTH_INVALID' || error === 'TOKEN_EXPIRED' || error === 'DEVICE_REVOKED' || error === 'DEVICE_OWNERSHIP_REQUIRED',
       connectedClients: this.listConnectedClients(),
+      direct: this.directStatus(),
     }
+  }
+
+  directStatus(): DirectHostStatus {
+    const status = this.directListener?.status()
+    if (status !== undefined) return status
+    return {
+      enabled: this.config.direct.enabled,
+      running: false,
+      port: this.config.direct.port,
+      endpoints: [],
+      bindAddresses: [],
+      activeConnections: 0,
+      pendingHandshakes: 0,
+      tailscale: { detected: false, source: 'none' },
+      ...(this.directError === undefined ? {} : { error: this.directError }),
+    }
+  }
+
+  /** Live toggle used by the Host settings control surface. */
+  async setDirect(enabled: boolean, port: number): Promise<void> {
+    if (this.closed) throw new Error('remote runtime is closed')
+    if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) {
+      throw new RpcError('INVALID_MESSAGE', 'Enter a Direct port between 1024 and 65535.')
+    }
+    this.config.direct = { enabled, port }
+    await this.stopDirect()
+    this.directError = undefined
+    if (enabled && this.config.role !== 'client') await this.startDirect()
+  }
+
+  private async startDirect(): Promise<void> {
+    const identity = this.identity
+    if (identity === undefined) throw new Error('remote runtime has not started')
+    const listener = new DirectHostListener({
+      identity,
+      identities: this.identities,
+      logger: this.logger,
+      port: this.config.direct.port,
+      accept: channel => this.acceptAuthenticatedPeer(channel),
+      closeConnection: (connectionId, code) => {
+        void this.connections.closeConnection(connectionId, code, { closedBy: 'host', retryable: true })
+      },
+    })
+    this.directListener = listener
+    try {
+      await listener.start()
+      const status = listener.status()
+      if (!status.running && status.error !== undefined) this.directError = status.error
+    } catch (error) {
+      this.directError = error instanceof Error ? error.message : 'DIRECT_START_FAILED'
+      this.logger.warn('Direct listener failed to start', { code: 'DIRECT_START_FAILED' })
+    }
+  }
+
+  private async stopDirect(): Promise<void> {
+    const listener = this.directListener
+    this.directListener = undefined
+    await listener?.stop().catch(() => undefined)
   }
 
   async hasStoredAuthorization(): Promise<boolean> {
@@ -415,6 +480,7 @@ export class HostPluginRuntime {
     if (this.closed) return
     this.closed = true
     this.serverApi?.close()
+    await this.stopDirect()
     await this.serverConnection?.stop()
     await this.connections.close()
     await this.localCodexPeer?.closeAll()
@@ -443,6 +509,11 @@ export class HostPluginRuntime {
       workspaceTypes: this.hostWorkspaceTypes(),
       codex: this.codex.status(),
       acp: this.acp.status(),
+      direct: {
+        enabled: this.config.direct.enabled,
+        running: this.directListener?.status().running ?? false,
+        endpointCount: this.directListener?.status().endpoints.length ?? 0,
+      },
     }
   }
 

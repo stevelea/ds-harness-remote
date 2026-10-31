@@ -1,7 +1,7 @@
 import type { ControlResult } from './control-result.js'
 import { AgentAcpClient, CodexRemoteClient } from '@dsh-remote/client-core'
 import type { PluginRouteCallResult } from '@dsh-remote/protocol'
-import type { RtcPeerConnectionFactory } from '@dsh-remote/webrtc'
+import type { AdaptiveTransport, DirectTransport, RtcPeerConnectionFactory } from '@dsh-remote/webrtc'
 import type { AcpVirtualWorkspaceView } from './acp/virtual-harness.js'
 import { acpCwdWorkspaceId, AcpVirtualHarness, discoverAcpVirtualWorkspaces } from './acp/virtual-harness.js'
 import type { HarnessMode } from './harness-target.js'
@@ -9,11 +9,13 @@ import { probeRemoteHostFeatures, remoteHostFeatures } from './client-capabiliti
 import { ClientCodexStreams } from './client-codex-streams.js'
 import { ClientConnection } from './client-connection.js'
 import { ClientReconnect } from './client-reconnect.js'
+import { DirectHostStore, normalizeDirectEndpoint, DirectHostStoreError } from './direct-host-store.js'
 import { ClientControl } from './client-control.js'
 import type {
   CodexLoopbackStream,
   ConnectedRemote,
   ConnectionProgressState,
+  DirectHostsView,
   HostAuthorizationControl,
   HostConnectionHandle,
   RemoteDeviceView,
@@ -77,6 +79,8 @@ export class ClientModeRuntime {
   private readonly connection: ClientConnection
   private readonly control: ClientControl
   private readonly codexStreamBridge: ClientCodexStreams
+  /** Lazily created so identity-store fixtures without a directory keep working. */
+  private directHostStore?: DirectHostStore
 
   private preview?: LoopbackPreview
   private identity?: HostIdentity
@@ -161,6 +165,11 @@ export class ClientModeRuntime {
       get host() { return owner.host },
       setHostAuthorization: (...args) => owner.setHostAuthorization(...args),
       setMode: (...args) => owner.setMode(...args),
+      listDirectHosts: () => owner.listDirectHosts(),
+      addDirectHost: (...args) => owner.addDirectHost(...args),
+      removeDirectHost: (...args) => owner.removeDirectHost(...args),
+      connectDirect: (...args) => owner.connectDirect(...args),
+      disconnectDirect: () => owner.disconnectDirect(),
     })
     this.codexStreamBridge = new ClientCodexStreams({
       activeRemote: (...args) => owner.activeRemote(...args),
@@ -238,7 +247,10 @@ export class ClientModeRuntime {
       recoveryGeneration: this.recoveryGeneration,
       transport: this.connected?.client.getStats().mode ?? 'Disconnected',
       connectedTargetDeviceId: this.connected?.target.deviceId,
-      preferredTransports: this.config.forceRelay ? ['relay'] : ['lan', 'p2p', 'turn', 'relay'],
+      preferredTransports: this.connected?.direct === true
+        || this.connectionProgress?.activeTransports?.includes('direct') === true
+        ? ['direct']
+        : this.config.forceRelay ? ['relay'] : ['lan', 'p2p', 'turn', 'relay'],
       ...(this.connectionProgress === undefined ? {} : {
         connectionProgress: {
           targetDeviceId: this.connectionProgress.targetDeviceId,
@@ -265,10 +277,169 @@ export class ClientModeRuntime {
     await preview?.close()
   }
 
+  /** Shape the Direct carrier details like the Server-negotiated network panel. */
+  private async directNetworkDetails(connected: ConnectedRemote): Promise<Record<string, unknown>> {
+    const identity = this.identity
+    if (identity === undefined) return this.status()
+    const details = await (connected.transport as DirectTransport).connectionDetails().catch(() => undefined)
+    if (this.connected !== connected || details === undefined) return this.status()
+    return {
+      ...this.status(),
+      network: {
+        ...(details.connectionId === undefined ? {} : { connectionId: details.connectionId }),
+        ...(details.connectedAt === undefined ? {} : { connectedAt: details.connectedAt }),
+        controlChannelUrl: details.endpoint,
+        controlChannelState: details.socketState,
+        preferredTransports: ['direct'],
+        ...(details.heartbeatIntervalMs === undefined ? {} : { heartbeatIntervalMs: details.heartbeatIntervalMs }),
+        ...(details.lastReceivedAt === undefined ? {} : { lastReceivedAt: details.lastReceivedAt }),
+        local: { deviceId: identity.deviceId, name: identity.name, platform: process.platform },
+        remote: {
+          deviceId: connected.target.deviceId,
+          name: connected.target.name,
+          platform: connected.target.platform,
+        },
+      },
+    }
+  }
+
+  async listDirectHosts(): Promise<DirectHostsView> {
+    await this.ensureDirectHosts().load()
+    return this.directHostsView()
+  }
+
+  async addDirectHost(hostDeviceId: string, endpoint: string): Promise<DirectHostsView> {
+    await this.ensureDirectHosts().load()
+    try {
+      await this.ensureDirectHosts().upsert({ hostDeviceId, endpoint })
+    } catch (error) {
+      throw directStoreError(error)
+    }
+    return this.directHostsView()
+  }
+
+  async removeDirectHost(hostDeviceId: string): Promise<DirectHostsView> {
+    await this.ensureDirectHosts().load()
+    try {
+      await this.ensureDirectHosts().remove(hostDeviceId)
+    } catch (error) {
+      throw directStoreError(error)
+    }
+    return this.directHostsView()
+  }
+
+  /**
+   * Connect to a saved Host over its tailnet address with no Server in the
+   * runtime path. The pinned identity key authenticates the Noise IK peer; the
+   * resulting carrier is registered exactly like the Server path so every
+   * existing remote workspace/session API keeps working.
+   */
+  async connectDirect(
+    input: { hostDeviceId: string; endpoint?: string },
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    if (this.closed) throw new ClientModeError('CANCELLED', 'The Remote runtime is closed.')
+    this.requireIdentity()
+    // The pinned identity is the authority for a Direct peer; resolve it before
+    // any saved address so an unpinned device always fails as DIRECT_HOST_UNKNOWN.
+    const target = this.identities.trustedPeer(input.hostDeviceId)
+    if (target === undefined) {
+      throw new ClientModeError('DIRECT_HOST_UNKNOWN', 'Authorize this Host through the Server before connecting directly.')
+    }
+    await this.ensureDirectHosts().load()
+    const stored = this.ensureDirectHosts().get(input.hostDeviceId)
+    const endpoint = (input.endpoint ?? stored?.endpoint ?? '').trim()
+    if (endpoint === '') throw new ClientModeError('INVALID_MESSAGE', 'A Direct host address is required.')
+    if (stored !== undefined && stored.publicKey !== target.publicKey) {
+      throw new ClientModeError('DIRECT_HOST_UNPINNED', 'The saved Direct host no longer matches the pinned Host identity.')
+    }
+    let normalized: string
+    try {
+      normalized = normalizeDirectEndpoint(endpoint)
+    } catch (error) {
+      throw directStoreError(error)
+    }
+    const selection = this.beginSelection(signal)
+    const lifetime = this.remoteLifetime.signal
+    const next = await this.connection.connectDirect(target, normalized, selection)
+    try {
+      this.assertRemoteCompatible(next)
+    } catch (error) {
+      this.connection.clearConnectionProgress(next.progressRunId)
+      await next.client.close().catch(() => undefined)
+      throw error
+    }
+    const previous = this.connected
+    await this.closePreview()
+    if (selection.aborted || lifetime.aborted || this.closed) {
+      await next.client.close().catch(() => undefined)
+      throw new ClientModeError('CANCELLED', 'The Direct connection request was superseded or closed.')
+    }
+    this.connected = next
+    next.client.onClose(error => this.handleRemoteClose(next, error))
+    if (next.client.getStats().connected !== true) {
+      // The carrier can close between the handshake and this commit; never
+      // keep a `connected` selection for a socket that is already gone.
+      this.connected = undefined
+      this.gatewaySwitch.disconnectRemote()
+      this.connection.clearConnectionProgress(next.progressRunId)
+      await next.client.close().catch(() => undefined)
+      throw new ClientModeError('TRANSPORT_CLOSED', 'The Direct connection closed before it became ready.', true)
+    }
+    this.connection.clearConnectionProgress(next.progressRunId)
+    this.pendingWorkspaceSelection = undefined
+    await this.closeCodexVirtual()
+    this.assertRemoteCurrent(next, selection)
+    await this.closeCursorVirtual()
+    this.assertRemoteCurrent(next, selection)
+    // Direct sessions do not auto-reconnect through the Server path.
+    this.gatewaySwitch.selectRemote(this.remoteTypertGateway(next), undefined, {
+      deviceId: next.target.deviceId,
+      name: next.target.name,
+    })
+    await this.codexStreamBridge.closeCodexStreams(previous?.client)
+    await previous?.client.close().catch(() => undefined)
+    await this.ensureDirectHosts().markConnected(target.deviceId).catch(() => undefined)
+    this.logger.info('Harness target switched', { mode: 'remote', targetDeviceId: shortId(next.target.deviceId), transport: 'Direct' })
+    return this.status()
+  }
+
+  /** Leave a Direct carrier; the Server path is untouched. */
+  async disconnectDirect(): Promise<Record<string, unknown>> {
+    if (this.connected?.direct !== true) return this.status()
+    this.reconnect.cancel()
+    this.recoverable = undefined
+    await this.leaveRemote()
+    return this.status()
+  }
+
+  private ensureDirectHosts(): DirectHostStore {
+    return this.directHostStore ??= new DirectHostStore({ identities: this.identities })
+  }
+
+  private directHostsView(): DirectHostsView {
+    return {
+      hosts: this.ensureDirectHosts().list().map(entry => ({
+        hostDeviceId: entry.hostDeviceId,
+        hostName: entry.hostName,
+        ...(entry.platform === undefined ? {} : { platform: entry.platform }),
+        endpoint: entry.endpoint,
+        addedAt: entry.addedAt,
+        ...(entry.lastConnectedAt === undefined ? {} : { lastConnectedAt: entry.lastConnectedAt }),
+      })),
+      candidates: this.identities.listTrustedPeers().map(peer => ({
+        hostDeviceId: peer.deviceId,
+        name: peer.name,
+        platform: peer.platform,
+      })),
+    }
+  }
+
   private async detailedStatus(): Promise<Record<string, unknown>> {
     const connected = this.connected
     if (connected === undefined || this.identity === undefined) return this.status()
-    const details = await connected.transport.connectionDetails()
+    if (connected.direct === true) return this.directNetworkDetails(connected)
+    const details = await (connected.transport as AdaptiveTransport).connectionDetails()
     if (this.connected !== connected) return this.status()
     return {
       ...this.status(),
@@ -955,7 +1126,9 @@ export class ClientModeRuntime {
 
   private handleRemoteClose(remote: ConnectedRemote, error?: Error): void {
     if (this.connected !== remote) return
-    const recover = this.recoverable === remote
+    // The Direct carrier has no Server in its path, so the Server reconnect
+    // loop cannot repair it; clean up and let the user reconnect explicitly.
+    const recover = this.recoverable === remote && remote.direct !== true
     this.recoverable = undefined
     this.connected = undefined
     this.connectionProgress = undefined
@@ -985,6 +1158,15 @@ export class ClientModeRuntime {
       }
     }, error)
   }
+}
+
+function directStoreError(error: unknown): ClientModeError {
+  if (error instanceof ClientModeError) return error
+  if (error instanceof DirectHostStoreError) return new ClientModeError(error.code, error.message)
+  return new ClientModeError(
+    'DIRECT_HOSTS_INVALID',
+    error instanceof Error ? error.message : 'The Direct host request failed.',
+  )
 }
 
 export { probeRemoteHostFeatures, remoteHostFeatures } from './client-capabilities.js'

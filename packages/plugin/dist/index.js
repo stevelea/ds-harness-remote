@@ -32839,7 +32839,7 @@ function parseAddress(value, fallbackPort) {
       return;
     }
     const host = authority.slice(1, closingBracket);
-    const port = parsePort(authority.slice(closingBracket + 1), fallbackPort);
+    const port = parsePort2(authority.slice(closingBracket + 1), fallbackPort);
     return [host, port];
   }
   const firstColon = authority.indexOf(":");
@@ -32847,12 +32847,12 @@ function parseAddress(value, fallbackPort) {
   if (firstColon !== -1 && firstColon === lastColon) {
     return [
       authority.slice(0, firstColon),
-      parsePort(authority.slice(firstColon + 1), fallbackPort)
+      parsePort2(authority.slice(firstColon + 1), fallbackPort)
     ];
   }
   return [authority, fallbackPort];
 }
-function parsePort(value, fallbackPort) {
+function parsePort2(value, fallbackPort) {
   const portString = value.startsWith(":") ? value.slice(1) : value;
   const port = Number.parseInt(portString, 10);
   return Number.isFinite(port) ? port : fallbackPort;
@@ -75007,6 +75007,119 @@ function decodeRelayDataFrame(data2, limits = {}) {
     throw new Error("Invalid Relay data frame.");
   }
 }
+var DIRECT_PROTOCOL_VERSION = 1;
+var DIRECT_WS_PATH = "/direct/v1";
+var DIRECT_CAPABILITY = "transport.direct.v1";
+var MAX_DIRECT_FRAME_BYTES = 1024 * 1024;
+var DIRECT_HELLO_TIMEOUT_MS = 5e3;
+var DIRECT_HANDSHAKE_TIMEOUT_MS = 15e3;
+var DIRECT_HEARTBEAT_INTERVAL_MS = 25e3;
+var DIRECT_IDLE_TIMEOUT_MS = 75e3;
+var MAX_DIRECT_ACTIVE_CONNECTIONS = 16;
+var MAX_DIRECT_PENDING_HANDSHAKES = 8;
+var MAX_DIRECT_HOST_NAME_LENGTH = 80;
+var MAX_DIRECT_CLIENT_VERSION_LENGTH = 64;
+var MAX_DIRECT_CLOSE_CODE_LENGTH = 64;
+var MAX_DIRECT_CLOSE_MESSAGE_LENGTH = 512;
+var directFrameTypes = [
+  "direct.hello",
+  "direct.ready",
+  "direct.reject",
+  "direct.handshake",
+  "direct.data",
+  "direct.ping",
+  "direct.pong",
+  "direct.close"
+];
+var directConnectionIdSchema = deviceIdSchema;
+var directCapabilityListSchema = external_exports.array(external_exports.unknown()).max(MAX_CAPABILITY_ENTRIES).pipe(external_exports.array(external_exports.string().min(1)).refine(uniqueStrings));
+var directCiphertextSchema = canonicalBase64UrlSchema.max(Math.ceil(MAX_DIRECT_FRAME_BYTES / 3) * 4);
+var directHelloPayloadSchema = external_exports.object({
+  connectionId: directConnectionIdSchema,
+  clientDeviceId: deviceIdSchema,
+  clientVersion: boundedUtf8Schema(1, MAX_DIRECT_CLIENT_VERSION_LENGTH).optional(),
+  capabilities: directCapabilityListSchema
+}).strict();
+var directReadyPayloadSchema = external_exports.object({
+  connectionId: directConnectionIdSchema,
+  hostDeviceId: deviceIdSchema,
+  hostName: boundedUtf8Schema(1, MAX_DIRECT_HOST_NAME_LENGTH).refine((value) => value.trim().length > 0),
+  hostPlatform: devicePlatformSchema.optional(),
+  protocol: external_exports.literal(DIRECT_PROTOCOL_VERSION),
+  capabilities: directCapabilityListSchema,
+  maxFrameBytes: external_exports.number().int().positive().max(MAX_DIRECT_FRAME_BYTES),
+  heartbeatIntervalMs: external_exports.number().int().positive().max(DIRECT_IDLE_TIMEOUT_MS)
+}).strict();
+var directRejectPayloadSchema = external_exports.object({
+  code: boundedUtf8Schema(1, MAX_DIRECT_CLOSE_CODE_LENGTH),
+  message: boundedUtf8Schema(1, MAX_DIRECT_CLOSE_MESSAGE_LENGTH),
+  retryable: external_exports.boolean().optional()
+}).strict();
+var directHandshakePayloadSchema = external_exports.object({
+  connectionId: directConnectionIdSchema,
+  step: external_exports.union([external_exports.literal(1), external_exports.literal(2)]),
+  data: directCiphertextSchema
+}).strict();
+var directDataPayloadSchema = external_exports.object({
+  connectionId: directConnectionIdSchema,
+  counter: external_exports.number().int().nonnegative().safe(),
+  ciphertext: directCiphertextSchema
+}).strict();
+var directPingPayloadSchema = external_exports.object({
+  nonce: boundedUtf8Schema(1, 64).optional()
+}).strict();
+var directClosePayloadSchema = external_exports.object({
+  code: boundedUtf8Schema(1, MAX_DIRECT_CLOSE_CODE_LENGTH),
+  message: boundedUtf8Schema(1, MAX_DIRECT_CLOSE_MESSAGE_LENGTH).optional()
+}).strict();
+var directFrameSchema = external_exports.object({
+  v: external_exports.literal(DIRECT_PROTOCOL_VERSION),
+  id: external_exports.string().min(1),
+  type: external_exports.enum(directFrameTypes),
+  timestamp: external_exports.number().int().positive().safe(),
+  payload: external_exports.unknown()
+}).strict();
+var directFramePayloadSchemas = {
+  "direct.hello": directHelloPayloadSchema,
+  "direct.ready": directReadyPayloadSchema,
+  "direct.reject": directRejectPayloadSchema,
+  "direct.handshake": directHandshakePayloadSchema,
+  "direct.data": directDataPayloadSchema,
+  "direct.ping": directPingPayloadSchema,
+  "direct.pong": directPingPayloadSchema,
+  "direct.close": directClosePayloadSchema
+};
+function createDirectFrame(type, payload, id6 = cryptoRandomId()) {
+  return {
+    v: DIRECT_PROTOCOL_VERSION,
+    id: id6,
+    type,
+    timestamp: Date.now(),
+    payload
+  };
+}
+function parseDirectFrame(input4) {
+  const frame = directFrameSchema.parse(input4);
+  return { ...frame, payload: directFramePayloadSchemas[frame.type].parse(frame.payload) };
+}
+function encodeDirectFrame(frame, maxFrameBytes = MAX_DIRECT_FRAME_BYTES) {
+  const parsed = parseDirectFrame(frame);
+  const encoded = JSON.stringify(parsed);
+  const bytes = new TextEncoder().encode(encoded).byteLength;
+  if (bytes > maxFrameBytes)
+    throw new Error("Direct frame exceeds the Direct transport limit.");
+  return encoded;
+}
+function decodeDirectFrame(data2, maxFrameBytes = MAX_DIRECT_FRAME_BYTES) {
+  const bytes = typeof data2 === "string" ? new TextEncoder().encode(data2) : data2;
+  if (bytes.byteLength > maxFrameBytes)
+    throw new Error("Direct frame exceeds the Direct transport limit.");
+  try {
+    return parseDirectFrame(parseWireJson(data2));
+  } catch {
+    throw new Error("Invalid Direct transport frame.");
+  }
+}
 function encodeMessage(message) {
   return new TextEncoder().encode(JSON.stringify(message));
 }
@@ -78089,6 +78202,13 @@ var BaseTransport = class {
 };
 
 // ../webrtc/dist/util.js
+async function socketText(data2) {
+  if (typeof data2 === "string")
+    return data2;
+  if (data2 instanceof ArrayBuffer)
+    return new TextDecoder().decode(data2);
+  return new TextDecoder().decode(await data2.arrayBuffer());
+}
 function toBase64Url(bytes) {
   const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join("");
   const base643 = typeof btoa === "function" ? btoa(binary) : Buffer.from(bytes).toString("base64");
@@ -79784,6 +79904,395 @@ function negotiateTimeout(serverMs, localMs) {
 function throwIfAborted(signal) {
   if (signal?.aborted)
     throw new Error("Adaptive connection was aborted");
+}
+
+// ../webrtc/dist/direct-transport.js
+var DEFAULT_CAPABILITIES2 = [DIRECT_CAPABILITY, "harness.api.v1"];
+var CONNECT_TIMEOUT_MS = 1e4;
+var DirectTransport = class extends BaseTransport {
+  url;
+  options;
+  handshakeHandlers = /* @__PURE__ */ new Set();
+  socket;
+  connectionId;
+  hostName;
+  negotiatedCapabilities = [];
+  maxFrameBytes = MAX_DIRECT_FRAME_BYTES;
+  heartbeatIntervalMs = DIRECT_HEARTBEAT_INTERVAL_MS;
+  idleTimeoutMs = DIRECT_IDLE_TIMEOUT_MS;
+  heartbeatTimer;
+  idleTimer;
+  helloTimer;
+  readyResolve;
+  readyReject;
+  lifetime;
+  closeNotified = false;
+  connected = false;
+  connectedAt;
+  lastReceivedAt;
+  inboundCounter = 0;
+  outboundCounter = 0;
+  bytesSent = 0;
+  bytesReceived = 0;
+  constructor(url2, options) {
+    super();
+    this.url = url2;
+    this.options = options;
+  }
+  static endpointUrl(endpoint) {
+    const trimmed = endpoint.trim();
+    if (trimmed.length === 0)
+      throw new Error("A Direct host address is required.");
+    let normalized = trimmed;
+    if (/^wss?:\/\//i.test(normalized)) {
+    } else if (/^https:\/\//i.test(normalized))
+      normalized = normalized.replace(/^https:/i, "wss:");
+    else
+      normalized = `ws://${normalized}`;
+    const url2 = new URL(normalized);
+    if (url2.protocol !== "ws:" && url2.protocol !== "wss:")
+      throw new Error("A Direct host address must use ws, wss or https.");
+    if (url2.pathname === "" || url2.pathname === "/")
+      url2.pathname = DIRECT_WS_PATH;
+    else if (url2.pathname !== DIRECT_WS_PATH)
+      throw new Error(`A Direct host address must not include a path other than ${DIRECT_WS_PATH}.`);
+    if (url2.search !== "" || url2.hash !== "" || url2.username !== "" || url2.password !== "") {
+      throw new Error("A Direct host address must not include credentials, query parameters or a fragment.");
+    }
+    return url2.toString();
+  }
+  async connect() {
+    if (this.socket !== void 0)
+      return;
+    const lifetime = new AbortController();
+    this.lifetime = lifetime;
+    this.resetState();
+    const socket = this.createSocket(this.url);
+    this.socket = socket;
+    await new Promise((resolve6, reject) => {
+      this.readyResolve = resolve6;
+      this.readyReject = reject;
+      this.helloTimer = setTimeout(() => this.failConnection(Object.assign(new Error("The Direct Host did not answer in time."), { code: "DIRECT_TIMEOUT" })), this.options.helloTimeoutMs ?? CONNECT_TIMEOUT_MS);
+      const onAbort = () => this.failConnection(Object.assign(new Error("The Direct connection was aborted."), { code: "CANCELLED" }));
+      this.options.signal?.addEventListener("abort", onAbort, { once: true });
+      this.removeAbort = () => this.options.signal?.removeEventListener("abort", onAbort);
+      socket.onopen = () => {
+        if (this.lifetime !== lifetime)
+          return;
+        try {
+          this.sendFrame(createDirectFrame("direct.hello", {
+            connectionId: this.requireConnectionId(),
+            clientDeviceId: this.options.deviceId,
+            ...this.options.clientVersion === void 0 ? {} : { clientVersion: this.options.clientVersion },
+            capabilities: [...this.options.capabilities ?? DEFAULT_CAPABILITIES2]
+          }));
+        } catch (error62) {
+          this.failConnection(asError2(error62));
+        }
+      };
+      socket.onmessage = (event) => {
+        void this.handleSocketMessage(event.data, lifetime);
+      };
+      socket.onerror = () => {
+        if (this.lifetime === lifetime && this.connected) {
+          this.failConnection(Object.assign(new Error("The Direct transport failed."), { code: "DIRECT_CLOSED" }));
+        }
+      };
+      socket.onclose = (event) => {
+        if (this.lifetime !== lifetime)
+          return;
+        const reason = typeof event.reason === "string" ? event.reason.trim() : "";
+        const code = /^[A-Z][A-Z0-9_]{0,63}$/.test(reason) ? reason : this.connected ? "DIRECT_CLOSED" : "DIRECT_CONNECT_FAILED";
+        this.failConnection(Object.assign(new Error("The Direct Host closed the connection."), {
+          code,
+          closeCode: event.code
+        }));
+      };
+    });
+  }
+  async send(data2) {
+    const socket = this.requireSocket();
+    await waitForRelayCapacity(socket);
+    const payload = {
+      connectionId: this.requireConnectionId(),
+      counter: this.outboundCounter,
+      ciphertext: toBase64Url(data2)
+    };
+    this.sendFrame(createDirectFrame("direct.data", payload));
+    this.outboundCounter += 1;
+    this.bytesSent += data2.byteLength;
+  }
+  async sendHandshake(step, data2) {
+    if (step !== 1)
+      throw new Error("The Direct initiator only sends Noise IK step 1.");
+    this.sendFrame(createDirectFrame("direct.handshake", {
+      connectionId: this.requireConnectionId(),
+      step: 1,
+      data: toBase64Url(data2)
+    }));
+  }
+  onHandshake(cb) {
+    this.handshakeHandlers.add(cb);
+    return () => this.handshakeHandlers.delete(cb);
+  }
+  connectionInfo() {
+    return {
+      connectionId: this.requireConnectionId(),
+      localDeviceId: this.options.deviceId,
+      remoteDeviceId: this.options.hostDeviceId
+    };
+  }
+  async connectionDetails() {
+    return {
+      ...this.connectionId === void 0 ? {} : { connectionId: this.connectionId },
+      ...this.connectedAt === void 0 ? {} : { connectedAt: this.connectedAt },
+      ...this.lastReceivedAt === void 0 ? {} : { lastReceivedAt: this.lastReceivedAt },
+      heartbeatIntervalMs: this.heartbeatIntervalMs,
+      endpoint: this.url,
+      socketState: socketState2(this.socket?.readyState),
+      hostDeviceId: this.options.hostDeviceId,
+      ...this.hostName === void 0 ? {} : { hostName: this.hostName },
+      capabilities: [...this.negotiatedCapabilities]
+    };
+  }
+  getStats() {
+    return {
+      mode: "Direct",
+      connected: this.connected && this.socket?.readyState === 1,
+      bytesSent: this.bytesSent,
+      bytesReceived: this.bytesReceived
+    };
+  }
+  async close() {
+    this.failConnection(Object.assign(new Error("The Direct transport was closed."), { code: "CANCELLED", silent: true }));
+  }
+  removeAbort;
+  async handleSocketMessage(data2, lifetime) {
+    if (this.lifetime !== lifetime)
+      return;
+    try {
+      const frame = decodeDirectFrame(await socketText(data2), this.maxFrameBytes);
+      this.lastReceivedAt = Date.now();
+      if (frame.type === "direct.ready") {
+        this.handleReady(frame.payload);
+        return;
+      }
+      if (frame.type === "direct.reject") {
+        const payload = frame.payload;
+        throw Object.assign(new Error(typeof payload.message === "string" ? payload.message : "The Direct Host rejected the connection."), {
+          code: typeof payload.code === "string" ? payload.code : "DIRECT_REJECTED",
+          retryable: payload.retryable
+        });
+      }
+      if (this.connectionId === void 0)
+        throw new Error("Received a Direct frame before direct.ready.");
+      if (frame.type === "direct.handshake") {
+        const payload = frame.payload;
+        if (payload.connectionId !== this.connectionId || payload.step !== 2 || typeof payload.data !== "string") {
+          throw new Error("Received an invalid Direct handshake frame.");
+        }
+        const handshake = fromBase64Url(payload.data);
+        for (const handler of this.handshakeHandlers)
+          handler(2, handshake);
+        return;
+      }
+      if (frame.type === "direct.data") {
+        const payload = frame.payload;
+        if (payload.connectionId !== this.connectionId || !Number.isSafeInteger(payload.counter) || payload.counter !== this.inboundCounter || typeof payload.ciphertext !== "string") {
+          throw new Error("Received a Direct data frame with an invalid counter.");
+        }
+        const ciphertext = fromBase64Url(payload.ciphertext);
+        this.inboundCounter += 1;
+        this.bytesReceived += ciphertext.byteLength;
+        this.emit(ciphertext);
+        return;
+      }
+      if (frame.type === "direct.ping") {
+        this.sendFrame(createDirectFrame("direct.pong", frame.payload));
+        return;
+      }
+      if (frame.type === "direct.pong")
+        return;
+      if (frame.type === "direct.close") {
+        const payload = frame.payload;
+        throw Object.assign(new Error(typeof payload.message === "string" ? payload.message : "The Direct Host closed the connection."), { code: typeof payload.code === "string" ? payload.code : "DIRECT_CLOSED" });
+      }
+      throw new Error("Received an unsupported Direct frame.");
+    } catch (error62) {
+      this.failConnection(Object.assign(asError2(error62), { code: error62.code ?? "INVALID_MESSAGE" }));
+    }
+  }
+  handleReady(payload) {
+    if (this.connectionId === void 0 || this.connected)
+      throw new Error("Received an unexpected direct.ready.");
+    if (payload.connectionId !== this.connectionId || payload.hostDeviceId !== this.options.hostDeviceId || payload.protocol !== DIRECT_PROTOCOL_VERSION || !Array.isArray(payload.capabilities) || !payload.capabilities.includes(DIRECT_CAPABILITY) || !Number.isSafeInteger(payload.maxFrameBytes) || payload.maxFrameBytes <= 0 || payload.maxFrameBytes > MAX_DIRECT_FRAME_BYTES || !Number.isSafeInteger(payload.heartbeatIntervalMs) || payload.heartbeatIntervalMs <= 0) {
+      throw new Error("The Direct Host returned an unexpected handshake response.");
+    }
+    this.maxFrameBytes = payload.maxFrameBytes;
+    this.heartbeatIntervalMs = Math.min(payload.heartbeatIntervalMs, DIRECT_IDLE_TIMEOUT_MS);
+    this.idleTimeoutMs = this.options.idleTimeoutMs ?? Math.max(DIRECT_IDLE_TIMEOUT_MS, this.heartbeatIntervalMs * 3);
+    this.hostName = typeof payload.hostName === "string" ? payload.hostName : void 0;
+    this.negotiatedCapabilities = [...payload.capabilities];
+    this.connected = true;
+    this.connectedAt = Date.now();
+    this.lastReceivedAt = this.connectedAt;
+    this.clearHelloTimer();
+    this.startHeartbeat();
+    const resolve6 = this.readyResolve;
+    this.readyResolve = void 0;
+    this.readyReject = void 0;
+    resolve6?.();
+  }
+  startHeartbeat() {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      try {
+        this.sendFrame(createDirectFrame("direct.ping", {}));
+      } catch {
+      }
+    }, this.heartbeatIntervalMs);
+    this.idleTimer = setInterval(() => {
+      if (this.lastReceivedAt === void 0)
+        return;
+      if (Date.now() - this.lastReceivedAt > this.idleTimeoutMs) {
+        this.failConnection(Object.assign(new Error("The Direct connection stopped responding."), {
+          code: "DIRECT_IDLE_TIMEOUT",
+          retryable: true
+        }));
+      }
+    }, Math.max(1e3, Math.floor(this.heartbeatIntervalMs / 2)));
+    for (const timer2 of [this.heartbeatTimer, this.idleTimer]) {
+      timer2?.unref?.();
+    }
+  }
+  stopHeartbeat() {
+    if (this.heartbeatTimer !== void 0)
+      clearInterval(this.heartbeatTimer);
+    if (this.idleTimer !== void 0)
+      clearInterval(this.idleTimer);
+    this.heartbeatTimer = void 0;
+    this.idleTimer = void 0;
+  }
+  clearHelloTimer() {
+    if (this.helloTimer !== void 0)
+      clearTimeout(this.helloTimer);
+    this.helloTimer = void 0;
+  }
+  sendFrame(frame) {
+    const socket = this.requireSocket();
+    socket.send(encodeDirectFrame(frame, this.maxFrameBytes));
+  }
+  requireSocket() {
+    const socket = this.socket;
+    if (socket === void 0 || socket.readyState !== 1)
+      throw new Error("The Direct transport is not connected.");
+    return socket;
+  }
+  requireConnectionId() {
+    const connectionId = this.connectionId;
+    if (connectionId === void 0)
+      throw new Error("The Direct transport has not sent direct.hello yet.");
+    return connectionId;
+  }
+  createSocket(url2) {
+    const factory = this.options.webSocketFactory ?? defaultWebSocketFactory;
+    const socket = factory(url2);
+    socket.binaryType = "arraybuffer";
+    return socket;
+  }
+  resetState() {
+    this.readyResolve = void 0;
+    this.readyReject = void 0;
+    this.connectionId = randomConnectionId();
+    this.hostName = void 0;
+    this.negotiatedCapabilities = [];
+    this.maxFrameBytes = MAX_DIRECT_FRAME_BYTES;
+    this.heartbeatIntervalMs = DIRECT_HEARTBEAT_INTERVAL_MS;
+    this.idleTimeoutMs = DIRECT_IDLE_TIMEOUT_MS;
+    this.inboundCounter = 0;
+    this.outboundCounter = 0;
+    this.bytesSent = 0;
+    this.bytesReceived = 0;
+    this.closeNotified = false;
+    this.connected = false;
+    this.connectedAt = void 0;
+    this.lastReceivedAt = void 0;
+  }
+  failConnection(error62) {
+    const silent = error62.silent === true;
+    const lifetime = this.lifetime;
+    this.lifetime = void 0;
+    this.clearHelloTimer();
+    this.stopHeartbeat();
+    this.removeAbort?.();
+    this.removeAbort = void 0;
+    const socket = this.socket;
+    this.socket = void 0;
+    this.connected = false;
+    if (socket !== void 0) {
+      try {
+        const failureCode = error62.code;
+        if (socket.readyState === 1)
+          socket.send(encodeDirectFrame(createDirectFrame("direct.close", {
+            code: typeof failureCode === "string" ? failureCode : "DIRECT_CLOSED"
+          })));
+      } catch {
+      }
+      try {
+        socket.close(1e3);
+      } catch {
+      }
+    }
+    const reject = this.readyReject;
+    this.readyResolve = void 0;
+    this.readyReject = void 0;
+    if (reject !== void 0) {
+      reject(error62);
+      return;
+    }
+    if (lifetime !== void 0 && !silent)
+      this.notifyClose(error62);
+  }
+  notifyClose(error62) {
+    if (this.closeNotified)
+      return;
+    this.closeNotified = true;
+    this.emitClose(error62);
+  }
+};
+function socketState2(readyState) {
+  if (readyState === 0)
+    return "connecting";
+  if (readyState === 1)
+    return "open";
+  if (readyState === 2)
+    return "closing";
+  return "closed";
+}
+function defaultWebSocketFactory(url2) {
+  const constructor = globalThis.WebSocket;
+  if (constructor === void 0)
+    throw new Error("This runtime has no WebSocket implementation for the Direct transport.");
+  return new constructor(url2);
+}
+function randomConnectionId() {
+  const crypto5 = globalThis.crypto;
+  if (crypto5?.randomUUID !== void 0)
+    return crypto5.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (crypto5?.getRandomValues !== void 0) {
+    crypto5.getRandomValues(bytes);
+  } else {
+    for (let index = 0; index < bytes.length; index += 1)
+      bytes[index] = Math.floor(Math.random() * 256);
+  }
+  bytes[6] = bytes[6] & 15 | 64;
+  bytes[8] = bytes[8] & 63 | 128;
+  const hex3 = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex3.slice(0, 8)}-${hex3.slice(8, 12)}-${hex3.slice(12, 16)}-${hex3.slice(16, 20)}-${hex3.slice(20)}`;
+}
+function asError2(error62) {
+  return error62 instanceof Error ? error62 : new Error("The Direct transport failed.");
 }
 
 // ../webrtc/dist/serial-send.js
@@ -86103,6 +86612,9 @@ async function waitForResponder(inner, noise, signal) {
   });
 }
 
+// src/version.ts
+var PLUGIN_VERSION = "0.6.0";
+
 // src/client-connection.ts
 var ClientConnection = class {
   constructor(context) {
@@ -86252,6 +86764,76 @@ var ClientConnection = class {
       signal?.removeEventListener("abort", onAbort);
     }
   }
+  /**
+   * Serverless Direct (Tailscale) connection. The Host identity and key are the
+   * ones pinned by the normal Server authorization; the Noise IK transcript
+   * authenticates the peer again, so the `direct.ready` claim is only a routing
+   * hint. Progress/error conventions match the Server path.
+   */
+  async connectDirect(target3, endpoint, signal) {
+    signal?.throwIfAborted();
+    const progressRunId = this.context.connectionProgressRun + 1;
+    this.context.connectionProgressRun = progressRunId;
+    this.context.connectionProgress = { runId: progressRunId, targetDeviceId: target3.deviceId, phase: "authorizing-peer" };
+    const identity3 = this.context.requireIdentity();
+    let client;
+    let closed = false;
+    let closeError;
+    const onAbort = () => {
+      void client?.close().catch(() => void 0);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      const transport = new DirectTransport(DirectTransport.endpointUrl(endpoint), {
+        deviceId: identity3.deviceId,
+        hostDeviceId: target3.deviceId,
+        clientVersion: PLUGIN_VERSION,
+        ...signal === void 0 ? {} : { signal }
+      });
+      client = new RemoteClientCore(new ClientSecureTransport(transport, identity3, target3), 6e4);
+      closed = false;
+      closeError = void 0;
+      client.onClose((error62) => {
+        closed = true;
+        closeError = error62;
+      });
+      const attemptClient = client;
+      this.updateConnectionProgress(progressRunId, "probing", ["direct"]);
+      await attemptClient.connect();
+      signal?.throwIfAborted();
+      if (!attemptClient.getStats().connected) {
+        throw new ClientModeError("TRANSPORT_CLOSED", "The Direct Host transport closed before it became ready.", true);
+      }
+      if (!closed) this.updateConnectionProgress(progressRunId, "connected", ["direct"]);
+      const details2 = await transport.connectionDetails().catch(() => void 0);
+      this.context.logger.info("remote Harness direct transport ready", {
+        targetDeviceId: shortId(target3.deviceId),
+        transport: attemptClient.getStats().mode,
+        ...details2 === void 0 ? {} : {
+          heartbeatIntervalMs: details2.heartbeatIntervalMs,
+          directCapabilities: details2.capabilities.length
+        }
+      });
+      const features = await probeRemoteHostFeatures(attemptClient);
+      signal?.throwIfAborted();
+      if (closed) throw closeError ?? new ClientModeError("TRANSPORT_CLOSED", "The Direct connection closed during discovery.", true);
+      return {
+        client: attemptClient,
+        target: target3,
+        transport,
+        features,
+        progressRunId,
+        direct: true
+      };
+    } catch (error62) {
+      this.clearConnectionProgress(progressRunId);
+      const failure5 = closed && closeError !== void 0 ? closeError : error62;
+      await client?.close().catch(() => void 0);
+      throw failure5;
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+    }
+  }
   beginAttemptProgress(runId, attempt) {
     if (attempt !== "direct") {
       this.updateConnectionProgress(runId, "probing", [attempt]);
@@ -86360,8 +86942,617 @@ function canReconnect(error62) {
   return failure5.retryable !== false;
 }
 
+// src/direct-host-store.ts
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+
+// src/config.ts
+import { hostname as hostname3 } from "node:os";
+import s from "@deepseek-ai/schemastery";
+var DEFAULT_REMOTE_SERVER_URL = "https://dsh.r2049.cn";
+var DEFAULT_DIRECT_PORT = 47400;
+var entryConfigSchema = s.object({
+  enabled: s.boolean(),
+  role: s.union(["host", "client", "both"]),
+  serverUrl: s.string(),
+  deviceName: s.string(),
+  terminal: s.object({ enabled: s.boolean() }),
+  remoteTools: s.object({ enabled: s.boolean() }),
+  hostControl: s.object({ enabled: s.boolean() }),
+  loopback: s.object({ ports: s.array(s.number()) }),
+  direct: s.object({ enabled: s.boolean(), port: s.number() }),
+  forceRelay: s.boolean(),
+  rotatePinnedPeerKey: s.boolean(),
+  logLevel: s.union(["debug", "info", "warn", "error"]),
+  reconnect: s.union([
+    s.boolean(),
+    s.object({
+      initialDelayMs: s.number(),
+      maxDelayMs: s.number(),
+      jitter: s.number()
+    })
+  ]),
+  codex: s.object({
+    enabled: s.boolean(),
+    binary: s.string()
+  }),
+  cursor: s.object({
+    enabled: s.boolean(),
+    binary: s.string()
+  }),
+  acp: s.object({ enabled: s.boolean(), backends: s.array(s.object({ id: s.string(), enabled: s.boolean(), command: s.string(), args: s.array(s.string()), cwd: s.string() })) })
+});
+function withVolatileSchema(schema) {
+  const volatile = schema.volatile;
+  return typeof volatile === "function" ? volatile.call(schema) : schema;
+}
+var Config = withVolatileSchema(entryConfigSchema);
+var reconnectSchema = external_exports.union([
+  external_exports.boolean(),
+  external_exports.object({
+    initialDelayMs: external_exports.number().int().min(100).max(6e4).optional(),
+    maxDelayMs: external_exports.number().int().min(1e3).max(3e5).optional(),
+    jitter: external_exports.number().min(0).max(1).optional()
+  }).strict()
+]);
+var configSchema = external_exports.object({
+  enabled: external_exports.boolean().optional(),
+  role: external_exports.enum(["host", "client", "both"]).optional(),
+  serverUrl: external_exports.string().url().optional(),
+  deviceName: external_exports.string().trim().min(1).max(80).optional(),
+  terminal: external_exports.object({ enabled: external_exports.boolean().optional() }).strict().optional(),
+  remoteTools: external_exports.object({ enabled: external_exports.boolean().optional() }).strict().optional(),
+  hostControl: external_exports.object({ enabled: external_exports.boolean().optional() }).strict().optional(),
+  loopback: external_exports.object({ ports: external_exports.array(external_exports.number().int().min(1024).max(65535)).max(16).optional() }).strict().optional(),
+  direct: external_exports.object({
+    enabled: external_exports.boolean().optional(),
+    port: external_exports.number().int().min(1024).max(65535).optional()
+  }).strict().optional(),
+  forceRelay: external_exports.boolean().optional(),
+  rotatePinnedPeerKey: external_exports.boolean().optional(),
+  logLevel: external_exports.enum(["debug", "info", "warn", "error"]).optional(),
+  reconnect: reconnectSchema.optional(),
+  codex: external_exports.object({
+    enabled: external_exports.boolean().optional(),
+    binary: external_exports.string().trim().min(1).max(4096).optional()
+  }).strict().optional(),
+  cursor: external_exports.object({
+    enabled: external_exports.boolean().optional(),
+    binary: external_exports.string().trim().min(1).max(4096).optional()
+  }).strict().optional(),
+  acp: external_exports.object({ enabled: external_exports.boolean().optional(), backends: external_exports.array(external_exports.object({ id: external_exports.string().trim().regex(/^[a-z0-9][a-z0-9._-]{0,31}$/i), enabled: external_exports.boolean().optional(), command: external_exports.string().trim().min(1).max(4096).optional(), args: external_exports.array(external_exports.string().max(4096)).max(32).optional(), cwd: external_exports.string().max(4096).optional() }).strict()).max(12).optional(), backend: external_exports.string().trim().regex(/^[a-z0-9][a-z0-9._-]{0,31}$/i).optional(), command: external_exports.string().trim().min(1).max(4096).optional(), args: external_exports.array(external_exports.string().max(4096)).max(32).optional(), cwd: external_exports.string().max(4096).optional() }).strict().optional()
+}).strict();
+function resolveConfig(input4 = {}, env = process.env) {
+  const parsed = configSchema.parse(input4);
+  const configuredCursorBackend = parsed.acp?.backends?.find((item) => item.id === "cursor");
+  const legacyCursorEnabled = parsed.acp?.backend === "cursor" ? parsed.acp.enabled : void 0;
+  const cursorEnabled = configuredCursorBackend?.enabled ?? parsed.cursor?.enabled ?? legacyCursorEnabled ?? false;
+  const codexBackend = parsed.acp?.backends?.find((item) => item.id === "codex");
+  const codexEnabled = codexBackend?.enabled ?? parsed.codex?.enabled ?? true;
+  const acpEnabled = parsed.acp?.enabled ?? true;
+  const reconnect = typeof parsed.reconnect === "object" ? parsed.reconnect : {};
+  const configuredServerUrl = parsed.serverUrl ?? env.DSH_REMOTE_SERVER;
+  const serverUrl = configuredServerUrl === void 0 ? void 0 : normalizeServerUrl(configuredServerUrl);
+  const initialDelayMs = reconnect.initialDelayMs ?? 1e3;
+  const maxDelayMs = reconnect.maxDelayMs ?? 3e4;
+  if (maxDelayMs < initialDelayMs) {
+    throw new TypeError("reconnect.maxDelayMs must be greater than or equal to reconnect.initialDelayMs");
+  }
+  return {
+    enabled: parsed.enabled ?? true,
+    role: parsed.role ?? "host",
+    ...serverUrl === void 0 ? {} : { serverUrl },
+    deviceName: parsed.deviceName ?? env.DSH_REMOTE_DEVICE_NAME ?? hostname3(),
+    hostControl: { enabled: parsed.hostControl?.enabled ?? true },
+    terminal: { enabled: parsed.terminal?.enabled ?? (env.DSH_REMOTE_TERMINAL_ENABLED === void 0 || env.DSH_REMOTE_TERMINAL_ENABLED === "true") },
+    remoteTools: { enabled: parsed.remoteTools?.enabled ?? true },
+    loopback: { ports: [...new Set(parsed.loopback?.ports ?? [])] },
+    direct: {
+      enabled: parsed.direct?.enabled ?? env.DSH_REMOTE_DIRECT_ENABLED === "true",
+      port: parsed.direct?.port ?? parseDirectPort(env.DSH_REMOTE_DIRECT_PORT) ?? DEFAULT_DIRECT_PORT
+    },
+    forceRelay: parsed.forceRelay ?? false,
+    rotatePinnedPeerKey: parsed.rotatePinnedPeerKey ?? false,
+    logLevel: parsed.logLevel ?? "info",
+    reconnect: {
+      enabled: parsed.reconnect !== false,
+      initialDelayMs,
+      maxDelayMs,
+      jitter: reconnect.jitter ?? 0.2
+    },
+    codex: {
+      enabled: acpEnabled && codexEnabled,
+      binary: codexBackend?.command ?? parsed.codex?.binary ?? "codex"
+    },
+    cursor: {
+      enabled: cursorEnabled,
+      binary: configuredCursorBackend?.command ?? parsed.cursor?.binary ?? env.DSH_REMOTE_CURSOR_BINARY ?? env.DSH_REMOTE_ACP_BINARY ?? "agent"
+    },
+    acp: {
+      enabled: acpEnabled,
+      backends: [.../* @__PURE__ */ new Set(["codex", "cursor", "antigravity", "pi", "claude", "opencode", ...parsed.acp?.backends?.filter((item) => item.id !== "kimi").map((item) => item.id) ?? []])].map((id6) => {
+        const configured = parsed.acp?.backends?.find((item) => item.id === id6);
+        const legacy = parsed.acp?.backend === id6 ? parsed.acp : void 0;
+        const defaults = { codex: "codex", cursor: "agent", antigravity: "agy", pi: "pi-acp", claude: "claude-agent-acp", opencode: "opencode" };
+        const cursorCommand = id6 === "codex" ? parsed.codex?.binary : id6 === "cursor" ? parsed.cursor?.binary ?? env.DSH_REMOTE_CURSOR_BINARY ?? env.DSH_REMOTE_ACP_BINARY : void 0;
+        const cwd2 = configured?.cwd ?? legacy?.cwd;
+        return {
+          id: id6,
+          enabled: configured?.enabled ?? legacy?.enabled ?? (id6 === "codex" ? codexEnabled : id6 === "cursor" ? cursorEnabled : id6 === "pi" ? true : id6 === "claude" ? true : id6 === "opencode" ? true : parsed.acp !== void 0),
+          command: configured?.command ?? legacy?.command ?? cursorCommand ?? defaults[id6] ?? id6,
+          args: id6 === "codex" ? ["app-server"] : configured?.args ?? legacy?.args ?? (id6 === "pi" || id6 === "claude" ? [] : id6 === "antigravity" ? ["--input-format", "stream-json", "--output-format", "stream-json"] : ["acp"]),
+          ...cwd2 === void 0 ? {} : { cwd: cwd2 }
+        };
+      })
+    }
+  };
+}
+function parseDirectPort(value) {
+  if (value === void 0 || value.trim() === "") return void 0;
+  const port = Number(value);
+  return Number.isSafeInteger(port) && port >= 1024 && port <= 65535 ? port : void 0;
+}
+var LOCAL_HOSTS = /* @__PURE__ */ new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+function isPrivateNetworkHostname(hostname6) {
+  if (LOCAL_HOSTS.has(hostname6)) return true;
+  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname6);
+  if (match === null) return false;
+  const octets = match.slice(1).map(Number);
+  if (octets.some((value) => value > 255)) return false;
+  const [a, b] = octets;
+  return a === 10 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168 || a === 169 && b === 254 || a === 100 && b >= 64 && b <= 127;
+}
+function normalizeServerUrl(value) {
+  const url2 = new URL(value);
+  const privateHttp = url2.protocol === "http:" && isPrivateNetworkHostname(url2.hostname);
+  if (url2.protocol !== "https:" && !privateHttp) {
+    throw new TypeError("serverUrl must use HTTPS (HTTP is allowed only for localhost or private-network addresses)");
+  }
+  if (url2.username !== "" || url2.password !== "") {
+    throw new TypeError("serverUrl must not contain credentials");
+  }
+  if (url2.search !== "" || url2.hash !== "") {
+    throw new TypeError("serverUrl must not contain query parameters or fragments");
+  }
+  if (url2.pathname !== "" && url2.pathname !== "/") {
+    throw new TypeError("serverUrl must be an origin without a path");
+  }
+  return url2.origin;
+}
+
+// src/direct-tailscale.ts
+import { execFile } from "node:child_process";
+import { hostname as systemHostname, networkInterfaces as systemNetworkInterfaces } from "node:os";
+var CLI_CANDIDATES = [
+  "tailscale",
+  "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+  "/usr/local/bin/tailscale",
+  "/opt/homebrew/bin/tailscale",
+  "/usr/bin/tailscale",
+  "C:\\Program Files\\Tailscale\\tailscale.exe"
+];
+var MAX_CLI_OUTPUT_BYTES = 512 * 1024;
+function isTailnetIPv4(value) {
+  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(value);
+  if (match === null) return false;
+  const octets = match.slice(1).map(Number);
+  if (octets.some((octet) => octet > 255)) return false;
+  return octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127;
+}
+function isTailnetIPv6(value) {
+  return value.toLowerCase().startsWith("fd7a:115c:a1e0:");
+}
+function isTailnetAddress(value) {
+  return isTailnetIPv4(value) || isTailnetIPv6(value);
+}
+function isTailnetHostname(value) {
+  const host = value.trim().toLowerCase().replace(/\.$/, "");
+  return host.endsWith(".ts.net") && host.length > ".ts.net".length;
+}
+function isLoopbackHost(value) {
+  const host = value.trim().toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+}
+function isBindableDirectAddress(value) {
+  return isTailnetAddress(value) || isLoopbackHost(value);
+}
+function formatHostForEndpoint(address2) {
+  return address2.includes(":") ? `[${address2}]` : address2;
+}
+function directEndpoints(dnsName, addresses, port = DEFAULT_DIRECT_PORT) {
+  const endpoints = /* @__PURE__ */ new Set();
+  const name2 = dnsName?.trim().replace(/\.$/, "");
+  if (name2 !== void 0 && isTailnetHostname(name2)) endpoints.add(`${name2}:${port}`);
+  for (const address2 of addresses) {
+    if (isTailnetAddress(address2)) endpoints.add(`${formatHostForEndpoint(address2)}:${port}`);
+  }
+  return [...endpoints];
+}
+function parseDirectEndpoint(input4, defaultPort2 = DEFAULT_DIRECT_PORT) {
+  const trimmed = input4.trim();
+  if (trimmed.length === 0) throw new TypeError("A Direct host address is required.");
+  if (trimmed.length > 512) throw new TypeError("A Direct host address is too long.");
+  let secure = false;
+  let value = trimmed;
+  if (/^wss:\/\//i.test(value)) {
+    secure = true;
+    value = value.replace(/^wss:\/\//i, "");
+  } else if (/^ws:\/\//i.test(value)) {
+    value = value.replace(/^ws:\/\//i, "");
+  } else if (/^https?:\/\//i.test(value)) throw new TypeError("Use a ws://, wss:// or host:port Direct address, not an HTTP URL.");
+  if (value.startsWith("/")) throw new TypeError("A Direct host address must not include a path.");
+  if (/[?#@/]/.test(value)) throw new TypeError("A Direct host address must not include credentials, a path, query parameters or a fragment.");
+  let host;
+  let port = defaultPort2;
+  if (value.startsWith("[")) {
+    const match = /^\[([^\]]+)\](?::(\d{1,5}))?$/.exec(value);
+    if (match === null) throw new TypeError("A bracketed IPv6 Direct address must look like [fd7a:...]:port.");
+    host = match[1];
+    if (match[2] !== void 0) port = parsePort(match[2]);
+  } else {
+    const colonCount = [...value].filter((char) => char === ":").length;
+    if (colonCount > 1) {
+      host = value;
+    } else if (colonCount === 1) {
+      const [name2, portText] = value.split(":");
+      host = name2;
+      port = parsePort(portText);
+    } else {
+      host = value;
+    }
+  }
+  if (host.length === 0) throw new TypeError("A Direct host address is required.");
+  if (!isTailnetAddress(host) && !isTailnetHostname(host) && !isLoopbackHost(host)) {
+    throw new TypeError("Direct mode expects a Tailscale address (100.64.0.0/10, fd7a:115c:a1e0::/48) or a *.ts.net name.");
+  }
+  if (isTailnetHostname(host) && secure === false) secure = false;
+  const urlHost = host.includes(":") ? `[${host}]` : host;
+  return {
+    host,
+    port,
+    secure,
+    url: `${secure ? "wss" : "ws"}://${urlHost}:${port}/direct/v1`
+  };
+}
+function parsePort(value) {
+  if (!/^\d{1,5}$/.test(value)) throw new TypeError("The Direct port is invalid.");
+  const port = Number(value);
+  if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new TypeError("The Direct port must be between 1024 and 65535.");
+  return port;
+}
+async function detectTailscale(options = {}) {
+  const port = options.port ?? DEFAULT_DIRECT_PORT;
+  const env = options.env ?? process.env;
+  const timeoutMs = options.timeoutMs ?? 2e3;
+  try {
+    const cli = await readTailscaleCli({ env, timeoutMs, execFileImpl: options.execFileImpl });
+    if (cli !== void 0) {
+      const addresses2 = normalizeAddresses(cli.addresses);
+      const dnsName = normalizeDnsName(cli.dnsName);
+      if (addresses2.length > 0) {
+        return {
+          detected: true,
+          backendState: cli.backendState,
+          hostName: cli.hostName,
+          ...dnsName === void 0 ? {} : { dnsName },
+          ...cli.magicDnsSuffix === void 0 ? {} : { magicDnsSuffix: cli.magicDnsSuffix },
+          addresses: addresses2,
+          endpoints: directEndpoints(dnsName, addresses2.map((address2) => address2.address), port),
+          source: "cli"
+        };
+      }
+      if (cli.backendState !== void 0 && cli.backendState !== "Running" && cli.backendState !== "Starting") {
+        return notDetected(`Tailscale is ${cli.backendState}.`, "cli");
+      }
+    }
+  } catch {
+  }
+  const scan = options.networkInterfacesImpl ?? systemNetworkInterfaces;
+  const addresses = tailnetInterfaces(scan());
+  if (addresses.length > 0) {
+    const hostName = (options.hostnameImpl ?? systemHostname)();
+    return {
+      detected: true,
+      hostName,
+      addresses,
+      endpoints: directEndpoints(void 0, addresses.map((address2) => address2.address), port),
+      source: "interfaces"
+    };
+  }
+  return notDetected("No Tailscale interface was detected on this machine.", "none");
+}
+function tailnetInterfaces(interfaces) {
+  const result = [];
+  for (const entries of Object.values(interfaces)) {
+    for (const entry of entries ?? []) {
+      const rawFamily = String(entry.family);
+      const family = rawFamily === "IPv4" || rawFamily === "4" ? "IPv4" : rawFamily === "IPv6" || rawFamily === "6" ? "IPv6" : void 0;
+      if (family === void 0) continue;
+      if (!isTailnetAddress(entry.address)) continue;
+      result.push({ address: entry.address.replace(/%.*$/, ""), family });
+    }
+  }
+  return dedupeAddresses(result);
+}
+function notDetected(error62, source) {
+  return { detected: false, addresses: [], endpoints: [], source, error: error62 };
+}
+async function readTailscaleCli(input4) {
+  const run = input4.execFileImpl ?? execFile;
+  const candidates = [input4.env.DSH_TAILSCALE_BIN, ...CLI_CANDIDATES].filter((value) => typeof value === "string" && value.length > 0);
+  for (const candidate of candidates) {
+    try {
+      const output2 = await new Promise((resolve6, reject) => {
+        run(candidate, ["status", "--json"], { timeout: input4.timeoutMs, maxBuffer: MAX_CLI_OUTPUT_BYTES, windowsHide: true }, (error62, stdout) => {
+          if (error62 !== null) reject(error62);
+          else resolve6(String(stdout));
+        });
+      });
+      const parsed = JSON.parse(output2);
+      if (parsed.BackendState !== "Running" && parsed.BackendState !== "Starting" && parsed.BackendState !== "Stopped") return void 0;
+      const self2 = parsed.Self;
+      const addresses = Array.isArray(self2?.TailscaleIPs) ? self2.TailscaleIPs.filter((value) => typeof value === "string") : [];
+      return {
+        ...typeof parsed.BackendState === "string" ? { backendState: parsed.BackendState } : {},
+        ...typeof self2?.HostName === "string" ? { hostName: self2.HostName } : {},
+        ...typeof self2?.DNSName === "string" ? { dnsName: self2.DNSName } : {},
+        ...typeof parsed.MagicDNSSuffix === "string" ? { magicDnsSuffix: parsed.MagicDNSSuffix } : {},
+        addresses
+      };
+    } catch {
+    }
+  }
+  return void 0;
+}
+function normalizeAddresses(values) {
+  return dedupeAddresses(values.map((value) => value.replace(/%.*$/, "")).filter(isTailnetAddress).map((address2) => ({ address: address2, family: isTailnetIPv4(address2) ? "IPv4" : "IPv6" })));
+}
+function normalizeDnsName(value) {
+  if (value === void 0) return void 0;
+  const name2 = value.trim().replace(/\.$/, "");
+  return isTailnetHostname(name2) ? name2 : void 0;
+}
+function dedupeAddresses(addresses) {
+  const seen = /* @__PURE__ */ new Set();
+  return addresses.filter((item) => {
+    if (seen.has(item.address)) return false;
+    seen.add(item.address);
+    return true;
+  });
+}
+
+// src/ids.ts
+import { randomBytes as randomBytes6 } from "node:crypto";
+function uuidV7(now = Date.now()) {
+  if (!Number.isSafeInteger(now) || now < 0 || now > 281474976710655) {
+    throw new RangeError("UUIDv7 timestamp must be a non-negative 48-bit integer");
+  }
+  const bytes = randomBytes6(16);
+  let timestamp = BigInt(now);
+  for (let index = 5; index >= 0; index -= 1) {
+    bytes[index] = Number(timestamp & 0xffn);
+    timestamp >>= 8n;
+  }
+  bytes[6] = 112 | bytes[6] & 15;
+  bytes[8] = 128 | bytes[8] & 63;
+  const hex3 = bytes.toString("hex");
+  return `${hex3.slice(0, 8)}-${hex3.slice(8, 12)}-${hex3.slice(12, 16)}-${hex3.slice(16, 20)}-${hex3.slice(20)}`;
+}
+
+// src/direct-host-store.ts
+var MAX_DIRECT_HOSTS = 16;
+var MAX_ENDPOINT_LENGTH = 512;
+var MAX_HOST_NAME_LENGTH = 80;
+var MAX_PLATFORM_LENGTH = 40;
+var MAX_PUBLIC_KEY_LENGTH = 128;
+var directHostEntrySchema = external_exports.object({
+  hostDeviceId: external_exports.string().uuid(),
+  hostName: external_exports.string().min(1).max(MAX_HOST_NAME_LENGTH),
+  platform: external_exports.string().min(1).max(MAX_PLATFORM_LENGTH).optional(),
+  publicKey: external_exports.string().min(1).max(MAX_PUBLIC_KEY_LENGTH).regex(/^[A-Za-z0-9_-]+$/),
+  endpoint: external_exports.string().min(1).max(MAX_ENDPOINT_LENGTH),
+  addedAt: external_exports.number().int().nonnegative(),
+  lastConnectedAt: external_exports.number().int().nonnegative().optional()
+}).strict();
+var directHostsFileSchema = external_exports.object({
+  schemaVersion: external_exports.literal(1),
+  hosts: external_exports.array(directHostEntrySchema).max(MAX_DIRECT_HOSTS)
+}).strict().refine(
+  (value) => new Set(value.hosts.map((host) => host.hostDeviceId)).size === value.hosts.length,
+  { message: "duplicate Direct hosts" }
+);
+var DirectHostStoreError = class extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+    this.name = "DirectHostStoreError";
+  }
+};
+var DirectHostStore = class {
+  constructor(options) {
+    this.options = options;
+    this.now = options.now ?? Date.now;
+    this.directory = options.directory ?? options.identities.directory;
+    this.path = join(this.directory, "direct-hosts.json");
+  }
+  path;
+  directory;
+  entries = [];
+  loaded = false;
+  loading;
+  writeFlight = Promise.resolve();
+  now;
+  /** Saved hosts for currently pinned peers, most recently connected first. */
+  list() {
+    return this.sorted().map((entry) => ({ ...entry }));
+  }
+  get(hostDeviceId) {
+    const entry = this.entries.find((item) => item.hostDeviceId === hostDeviceId);
+    return entry === void 0 ? void 0 : { ...entry };
+  }
+  async upsert(input4) {
+    const hostDeviceId = parseDeviceId(input4.hostDeviceId);
+    const endpoint = parseEndpoint(input4.endpoint);
+    const peer = this.options.identities.trustedPeer(hostDeviceId);
+    if (peer === void 0) {
+      throw new DirectHostStoreError(
+        "DIRECT_HOST_UNKNOWN",
+        "This Host is not authorized on this device. Authorize it through the Server before saving a Direct address."
+      );
+    }
+    const publicKey = input4.publicKey === void 0 ? peer.publicKey : parsePublicKey(input4.publicKey);
+    if (publicKey !== peer.publicKey) {
+      throw new DirectHostStoreError(
+        "DIRECT_HOST_UNPINNED",
+        "The saved Direct host does not match the pinned Host identity."
+      );
+    }
+    const hostName = parseDisplayName(input4.hostName) ?? peer.name;
+    const platform3 = parseDisplayName(input4.platform) ?? peer.platform;
+    return this.mutate(() => {
+      const existing = this.entries.find((entry2) => entry2.hostDeviceId === hostDeviceId);
+      if (existing === void 0 && this.entries.length >= MAX_DIRECT_HOSTS) {
+        throw new DirectHostStoreError("DIRECT_HOST_LIMIT", `At most ${MAX_DIRECT_HOSTS} Direct hosts can be saved.`);
+      }
+      const entry = {
+        hostDeviceId,
+        hostName,
+        platform: platform3,
+        publicKey,
+        endpoint,
+        addedAt: existing?.addedAt ?? this.now(),
+        ...existing?.lastConnectedAt === void 0 ? {} : { lastConnectedAt: existing.lastConnectedAt }
+      };
+      this.entries = [...this.entries.filter((item) => item.hostDeviceId !== hostDeviceId), entry];
+      return { ...entry };
+    });
+  }
+  async remove(hostDeviceId) {
+    const id6 = parseDeviceId(hostDeviceId);
+    return this.mutate(() => {
+      const next = this.entries.filter((entry) => entry.hostDeviceId !== id6);
+      if (next.length === this.entries.length) return false;
+      this.entries = next;
+      return true;
+    });
+  }
+  async markConnected(hostDeviceId) {
+    const id6 = parseDeviceId(hostDeviceId);
+    return this.mutate(() => {
+      const existing = this.entries.find((entry2) => entry2.hostDeviceId === id6);
+      if (existing === void 0) return void 0;
+      const entry = { ...existing, lastConnectedAt: this.now() };
+      this.entries = this.entries.map((item) => item.hostDeviceId === id6 ? entry : item);
+      return { ...entry };
+    });
+  }
+  /** Load from disk once; drops entries whose peer is no longer pinned. */
+  async load() {
+    if (this.loaded) return this.list();
+    this.loading ??= this.readFile().finally(() => {
+      this.loading = void 0;
+    });
+    await this.loading;
+    return this.list();
+  }
+  async readFile() {
+    let parsed;
+    try {
+      const text = await readFile(this.path, "utf8");
+      parsed = parseFile(text);
+    } catch (error62) {
+      if (isNodeError(error62) && error62.code === "ENOENT") {
+        this.entries = [];
+        this.loaded = true;
+        return;
+      }
+      throw new DirectHostStoreError("DIRECT_HOSTS_INVALID", "The saved Direct host list is unreadable or invalid.");
+    }
+    const pinned = parsed.hosts.filter((entry) => {
+      const peer = this.options.identities.trustedPeer(entry.hostDeviceId);
+      return peer !== void 0 && peer.publicKey === entry.publicKey;
+    });
+    this.entries = pinned;
+    this.loaded = true;
+    if (pinned.length !== parsed.hosts.length) await this.persist();
+  }
+  async mutate(mutation) {
+    const run = this.writeFlight.then(async () => {
+      await this.load();
+      const value = mutation();
+      await this.persist();
+      return value;
+    });
+    this.writeFlight = run.then(() => void 0, () => void 0);
+    return run;
+  }
+  async persist() {
+    const payload = {
+      schemaVersion: 1,
+      hosts: this.sorted()
+    };
+    await atomicJsonWrite(this.path, payload, 384);
+  }
+  sorted() {
+    return [...this.entries].sort((left, right) => (right.lastConnectedAt ?? right.addedAt) - (left.lastConnectedAt ?? left.addedAt));
+  }
+};
+function normalizeDirectEndpoint(input4, defaultPort2 = DEFAULT_DIRECT_PORT) {
+  return parseEndpoint(input4, defaultPort2);
+}
+function parseEndpoint(input4, defaultPort2 = DEFAULT_DIRECT_PORT) {
+  if (typeof input4 !== "string" || input4.trim() === "" || input4.length > MAX_ENDPOINT_LENGTH) {
+    throw new DirectHostStoreError("DIRECT_ENDPOINT_INVALID", "A Direct host address is required.");
+  }
+  try {
+    return parseDirectEndpoint(input4, defaultPort2).url;
+  } catch (error62) {
+    throw new DirectHostStoreError(
+      "DIRECT_ENDPOINT_INVALID",
+      error62 instanceof Error ? error62.message : "The Direct host address is invalid."
+    );
+  }
+}
+function parseDeviceId(value) {
+  if (typeof value !== "string" || !directHostEntrySchema.shape.hostDeviceId.safeParse(value).success) {
+    throw new DirectHostStoreError("DIRECT_HOST_INVALID", "A valid Host device ID is required.");
+  }
+  return value;
+}
+function parsePublicKey(value) {
+  if (typeof value !== "string" || !directHostEntrySchema.shape.publicKey.safeParse(value).success) {
+    throw new DirectHostStoreError("DIRECT_HOST_INVALID", "The Host identity key is invalid.");
+  }
+  return value;
+}
+function parseDisplayName(value) {
+  if (value === void 0) return void 0;
+  const trimmed = value.trim();
+  if (trimmed === "" || trimmed.length > MAX_HOST_NAME_LENGTH) return void 0;
+  return trimmed;
+}
+function parseFile(text) {
+  try {
+    return directHostsFileSchema.parse(JSON.parse(text));
+  } catch (error62) {
+    throw new DirectHostStoreError("DIRECT_HOSTS_INVALID", "The saved Direct host list is unreadable or invalid.");
+  }
+}
+async function atomicJsonWrite(path, value, mode2) {
+  await mkdir(dirname(path), { recursive: true, mode: 448 });
+  const temporary = `${path}.${process.pid}.${uuidV7()}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(value, null, 2)}
+`, { encoding: "utf8", mode: mode2, flag: "wx" });
+  await chmod(temporary, mode2);
+  await rename(temporary, path);
+  await chmod(path, mode2);
+}
+function isNodeError(error62) {
+  return error62 instanceof Error && "code" in error62;
+}
+
 // src/loopback-preview.ts
-import { randomBytes as randomBytes6, randomUUID } from "node:crypto";
+import { randomBytes as randomBytes7, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 
@@ -86676,7 +87867,7 @@ var LoopbackPreview = class {
     this.servers.clear();
   }
   async start(port) {
-    const hostname6 = `dsh-${randomBytes6(24).toString("hex")}.localhost`;
+    const hostname6 = `dsh-${randomBytes7(24).toString("hex")}.localhost`;
     let authority = "";
     const accepted = (req) => req.headers.host === authority && (req.headers.origin === void 0 || req.headers.origin === `http://${authority}`) && req.headers["service-worker"] === void 0;
     const server = createServer((req, res) => {
@@ -87226,6 +88417,30 @@ var ClientControl = class {
         }
         return ok(await this.context.host.authorizeHostWithCode(value.code));
       }
+      if (endpoint === "direct.hosts.list") return ok(await this.context.listDirectHosts());
+      if (endpoint === "direct.host.add") {
+        const value = record3(payload);
+        directKeys(value, ["hostDeviceId", "endpoint"]);
+        return ok(await this.context.addDirectHost(
+          directHostId(value.hostDeviceId),
+          directEndpoint(value.endpoint)
+        ));
+      }
+      if (endpoint === "direct.host.remove") {
+        const value = record3(payload);
+        directKeys(value, ["hostDeviceId"]);
+        return ok(await this.context.removeDirectHost(directHostId(value.hostDeviceId)));
+      }
+      if (endpoint === "direct.connect") {
+        const value = record3(payload);
+        directKeys(value, ["hostDeviceId", "endpoint"]);
+        const directAddress = value.endpoint === void 0 ? void 0 : directEndpoint(value.endpoint);
+        return ok(await this.context.connectDirect({
+          hostDeviceId: directHostId(value.hostDeviceId),
+          ...directAddress === void 0 ? {} : { endpoint: directAddress }
+        }, signal));
+      }
+      if (endpoint === "direct.disconnect") return ok(await this.context.disconnectDirect());
       if (endpoint === "mode.set") {
         const value = record3(payload);
         if (value.mode !== "local" && value.mode !== "remote") throw new ClientModeError("INVALID_MESSAGE", "Mode must be local or remote.");
@@ -87237,6 +88452,23 @@ var ClientControl = class {
     }
   }
 };
+function directKeys(value, allowed) {
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) throw new ClientModeError("INVALID_MESSAGE", "The Direct request payload is invalid.");
+  }
+}
+function directHostId(value) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 128) {
+    throw new ClientModeError("INVALID_MESSAGE", "An authorized Host device ID is required.");
+  }
+  return value;
+}
+function directEndpoint(value) {
+  if (typeof value !== "string" || value.trim() === "" || value.length > 512) {
+    throw new ClientModeError("INVALID_MESSAGE", "A Direct host address is required.");
+  }
+  return value.trim();
+}
 
 // src/client-workspace-queries.ts
 async function readRemoteWorkspaceBaseline(gateway, signal) {
@@ -90071,9 +91303,9 @@ function writeText(res, status2, body) {
 }
 
 // src/harness-version.ts
-import { readFile, realpath as realpathEntrypoint } from "node:fs/promises";
+import { readFile as readFile2, realpath as realpathEntrypoint } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname as dirname2, isAbsolute, join as join2 } from "node:path";
 var HARNESS_PACKAGE_NAME = "@deepseek-ai/dsh";
 function normalizeHarnessVersion(value) {
   if (typeof value !== "string") return void 0;
@@ -90092,7 +91324,7 @@ function harnessSessionGeneration(version2) {
 }
 async function readHarnessManifestVersion(manifestPath) {
   try {
-    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    const manifest = JSON.parse(await readFile2(manifestPath, "utf8"));
     if (manifest.name !== HARNESS_PACKAGE_NAME) return void 0;
     return normalizeHarnessVersion(manifest.version);
   } catch {
@@ -90107,11 +91339,11 @@ async function readHarnessDistributionVersion(entrypoint = process.argv[1]) {
   } catch {
   }
   if (!isAbsolute(resolvedEntrypoint)) return void 0;
-  let directory = dirname(resolvedEntrypoint);
+  let directory = dirname2(resolvedEntrypoint);
   for (let depth = 0; depth < 8; depth += 1) {
-    const version2 = await readHarnessManifestVersion(join(directory, "package.json"));
+    const version2 = await readHarnessManifestVersion(join2(directory, "package.json"));
     if (version2 !== void 0) return version2;
-    const parent = dirname(directory);
+    const parent = dirname2(directory);
     if (parent === directory) break;
     directory = parent;
   }
@@ -90120,24 +91352,6 @@ async function readHarnessDistributionVersion(entrypoint = process.argv[1]) {
   } catch {
     return void 0;
   }
-}
-
-// src/ids.ts
-import { randomBytes as randomBytes7 } from "node:crypto";
-function uuidV7(now = Date.now()) {
-  if (!Number.isSafeInteger(now) || now < 0 || now > 281474976710655) {
-    throw new RangeError("UUIDv7 timestamp must be a non-negative 48-bit integer");
-  }
-  const bytes = randomBytes7(16);
-  let timestamp = BigInt(now);
-  for (let index = 5; index >= 0; index -= 1) {
-    bytes[index] = Number(timestamp & 0xffn);
-    timestamp >>= 8n;
-  }
-  bytes[6] = 112 | bytes[6] & 15;
-  bytes[8] = 128 | bytes[8] & 63;
-  const hex3 = bytes.toString("hex");
-  return `${hex3.slice(0, 8)}-${hex3.slice(8, 12)}-${hex3.slice(12, 16)}-${hex3.slice(16, 20)}-${hex3.slice(20)}`;
 }
 
 // src/session-format-compat.ts
@@ -90682,7 +91896,7 @@ function normalizeThemeNamespace(namespace) {
 
 // src/workspace-transfer-limits.ts
 function workspaceUploadMaxBytes(mode2) {
-  return mode2 === "LAN" || mode2 === "P2P" ? 1024 * 1024 * 1024 : 20 * 1024 * 1024;
+  return mode2 === "LAN" || mode2 === "P2P" || mode2 === "Direct" ? 1024 * 1024 * 1024 : 20 * 1024 * 1024;
 }
 
 // src/remote-file-upload.ts
@@ -90746,14 +91960,14 @@ async function uploadRemoteFile(client, sessionId, localPath, name2, signal, ass
 import { basename as basename2, isAbsolute as isAbsolute2 } from "node:path";
 
 // src/remote-file-download.ts
-import { mkdir, mkdtemp, open as open3, rm } from "node:fs/promises";
+import { mkdir as mkdir2, mkdtemp, open as open3, rm } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join as join2 } from "node:path";
+import { join as join3 } from "node:path";
 var MAX_BYTES = 50 * 1024 * 1024;
 var CHUNK_BYTES = 256 * 1024;
 var identity = external_exports.object({ absolutePath: external_exports.string().min(1), version: external_exports.string().min(1), bytes: external_exports.number().int().min(0).max(MAX_BYTES) });
 var chunkSchema = identity.extend({ offset: external_exports.number().int().min(0), data: external_exports.instanceof(Uint8Array), eof: external_exports.boolean() });
-async function downloadRemoteFile(gateway, sessionId, path, signal, assertCurrent, downloads = join2(homedir(), "Downloads")) {
+async function downloadRemoteFile(gateway, sessionId, path, signal, assertCurrent, downloads = join3(homedir(), "Downloads")) {
   const call = async (method, extra = {}) => {
     signal.throwIfAborted();
     const result = await gateway.invoke({
@@ -90767,10 +91981,10 @@ async function downloadRemoteFile(gateway, sessionId, path, signal, assertCurren
     return result;
   };
   const before = identity.parse(await call("stat"));
-  await mkdir(downloads, { recursive: true });
-  const directory = await mkdtemp(join2(downloads, "dsh-remote-"));
+  await mkdir2(downloads, { recursive: true });
+  const directory = await mkdtemp(join3(downloads, "dsh-remote-"));
   const name2 = (path.split(/[\\/]/).at(-1) ?? "").replace(/[^\p{L}\p{N}._-]/gu, "_").slice(0, 120);
-  const localPath = join2(directory, !name2 || name2 === "." || name2 === ".." ? "download" : name2);
+  const localPath = join3(directory, !name2 || name2 === "." || name2 === ".." ? "download" : name2);
   try {
     const file2 = await open3(localPath, "wx", 384);
     try {
@@ -91218,8 +92432,8 @@ var ObservedState = class {
 import { platform } from "node:os";
 
 // src/server-credentials.ts
-import { chmod, mkdir as mkdir2, readFile as readFile2, rename, rm as rm2, stat, writeFile } from "node:fs/promises";
-import { dirname as dirname2, join as join3 } from "node:path";
+import { chmod as chmod2, mkdir as mkdir3, readFile as readFile3, rename as rename2, rm as rm2, stat, writeFile as writeFile2 } from "node:fs/promises";
+import { dirname as dirname3, join as join4 } from "node:path";
 var credentialSchema = external_exports.object({
   schemaVersion: external_exports.literal(1),
   serverUrl: external_exports.string().url(),
@@ -91234,7 +92448,7 @@ var credentialSchema = external_exports.object({
 var ServerCredentialStore = class {
   path;
   constructor(directory) {
-    this.path = join3(directory, "server-credentials.json");
+    this.path = join4(directory, "server-credentials.json");
   }
   /** Serialize the complete read/refresh/write transaction across processes.
    * Never steal an old lock: a suspended owner may still consume a one-use token.
@@ -91242,11 +92456,11 @@ var ServerCredentialStore = class {
    */
   async withRefreshLock(operation) {
     const lock = `${this.path}.refresh-lock`;
-    await mkdir2(dirname2(this.path), { recursive: true, mode: 448 });
+    await mkdir3(dirname3(this.path), { recursive: true, mode: 448 });
     const deadline = Date.now() + 15e3;
     for (; ; ) {
       try {
-        await mkdir2(lock, { mode: 448 });
+        await mkdir3(lock, { mode: 448 });
         break;
       } catch (error62) {
         if (!(error62 instanceof Error) || !("code" in error62) || error62.code !== "EEXIST") throw error62;
@@ -91265,7 +92479,7 @@ var ServerCredentialStore = class {
     await assertPrivateMode(this.path);
     let parsed;
     try {
-      parsed = credentialSchema.parse(JSON.parse(await readFile2(this.path, "utf8")));
+      parsed = credentialSchema.parse(JSON.parse(await readFile3(this.path, "utf8")));
     } catch (error62) {
       throw new ServerCredentialsInvalidError(`server credentials are invalid: ${safeMessage(error62)}`);
     }
@@ -91291,12 +92505,12 @@ var ServerCredentialsBusyError = class extends Error {
   }
 };
 async function atomicWrite(path, contents) {
-  await mkdir2(dirname2(path), { recursive: true, mode: 448 });
+  await mkdir3(dirname3(path), { recursive: true, mode: 448 });
   const temporary = `${path}.${process.pid}.${uuidV7()}.tmp`;
-  await writeFile(temporary, contents, { encoding: "utf8", mode: 384, flag: "wx" });
-  await chmod(temporary, 384);
-  await rename(temporary, path);
-  await chmod(path, 384);
+  await writeFile2(temporary, contents, { encoding: "utf8", mode: 384, flag: "wx" });
+  await chmod2(temporary, 384);
+  await rename2(temporary, path);
+  await chmod2(path, 384);
 }
 async function assertPrivateMode(path) {
   if (process.platform === "win32") return;
@@ -91315,168 +92529,6 @@ async function exists(path) {
 function safeMessage(error62) {
   return error62 instanceof Error ? error62.message : "invalid credential data";
 }
-
-// src/config.ts
-import { hostname as hostname3 } from "node:os";
-import s from "@deepseek-ai/schemastery";
-var DEFAULT_REMOTE_SERVER_URL = "https://dsh.r2049.cn";
-var entryConfigSchema = s.object({
-  enabled: s.boolean(),
-  role: s.union(["host", "client", "both"]),
-  serverUrl: s.string(),
-  deviceName: s.string(),
-  terminal: s.object({ enabled: s.boolean() }),
-  remoteTools: s.object({ enabled: s.boolean() }),
-  hostControl: s.object({ enabled: s.boolean() }),
-  loopback: s.object({ ports: s.array(s.number()) }),
-  forceRelay: s.boolean(),
-  rotatePinnedPeerKey: s.boolean(),
-  logLevel: s.union(["debug", "info", "warn", "error"]),
-  reconnect: s.union([
-    s.boolean(),
-    s.object({
-      initialDelayMs: s.number(),
-      maxDelayMs: s.number(),
-      jitter: s.number()
-    })
-  ]),
-  codex: s.object({
-    enabled: s.boolean(),
-    binary: s.string()
-  }),
-  cursor: s.object({
-    enabled: s.boolean(),
-    binary: s.string()
-  }),
-  acp: s.object({ enabled: s.boolean(), backends: s.array(s.object({ id: s.string(), enabled: s.boolean(), command: s.string(), args: s.array(s.string()), cwd: s.string() })) })
-});
-function withVolatileSchema(schema) {
-  const volatile = schema.volatile;
-  return typeof volatile === "function" ? volatile.call(schema) : schema;
-}
-var Config = withVolatileSchema(entryConfigSchema);
-var reconnectSchema = external_exports.union([
-  external_exports.boolean(),
-  external_exports.object({
-    initialDelayMs: external_exports.number().int().min(100).max(6e4).optional(),
-    maxDelayMs: external_exports.number().int().min(1e3).max(3e5).optional(),
-    jitter: external_exports.number().min(0).max(1).optional()
-  }).strict()
-]);
-var configSchema = external_exports.object({
-  enabled: external_exports.boolean().optional(),
-  role: external_exports.enum(["host", "client", "both"]).optional(),
-  serverUrl: external_exports.string().url().optional(),
-  deviceName: external_exports.string().trim().min(1).max(80).optional(),
-  terminal: external_exports.object({ enabled: external_exports.boolean().optional() }).strict().optional(),
-  remoteTools: external_exports.object({ enabled: external_exports.boolean().optional() }).strict().optional(),
-  hostControl: external_exports.object({ enabled: external_exports.boolean().optional() }).strict().optional(),
-  loopback: external_exports.object({ ports: external_exports.array(external_exports.number().int().min(1024).max(65535)).max(16).optional() }).strict().optional(),
-  forceRelay: external_exports.boolean().optional(),
-  rotatePinnedPeerKey: external_exports.boolean().optional(),
-  logLevel: external_exports.enum(["debug", "info", "warn", "error"]).optional(),
-  reconnect: reconnectSchema.optional(),
-  codex: external_exports.object({
-    enabled: external_exports.boolean().optional(),
-    binary: external_exports.string().trim().min(1).max(4096).optional()
-  }).strict().optional(),
-  cursor: external_exports.object({
-    enabled: external_exports.boolean().optional(),
-    binary: external_exports.string().trim().min(1).max(4096).optional()
-  }).strict().optional(),
-  acp: external_exports.object({ enabled: external_exports.boolean().optional(), backends: external_exports.array(external_exports.object({ id: external_exports.string().trim().regex(/^[a-z0-9][a-z0-9._-]{0,31}$/i), enabled: external_exports.boolean().optional(), command: external_exports.string().trim().min(1).max(4096).optional(), args: external_exports.array(external_exports.string().max(4096)).max(32).optional(), cwd: external_exports.string().max(4096).optional() }).strict()).max(12).optional(), backend: external_exports.string().trim().regex(/^[a-z0-9][a-z0-9._-]{0,31}$/i).optional(), command: external_exports.string().trim().min(1).max(4096).optional(), args: external_exports.array(external_exports.string().max(4096)).max(32).optional(), cwd: external_exports.string().max(4096).optional() }).strict().optional()
-}).strict();
-function resolveConfig(input4 = {}, env = process.env) {
-  const parsed = configSchema.parse(input4);
-  const configuredCursorBackend = parsed.acp?.backends?.find((item) => item.id === "cursor");
-  const legacyCursorEnabled = parsed.acp?.backend === "cursor" ? parsed.acp.enabled : void 0;
-  const cursorEnabled = configuredCursorBackend?.enabled ?? parsed.cursor?.enabled ?? legacyCursorEnabled ?? false;
-  const codexBackend = parsed.acp?.backends?.find((item) => item.id === "codex");
-  const codexEnabled = codexBackend?.enabled ?? parsed.codex?.enabled ?? true;
-  const acpEnabled = parsed.acp?.enabled ?? true;
-  const reconnect = typeof parsed.reconnect === "object" ? parsed.reconnect : {};
-  const configuredServerUrl = parsed.serverUrl ?? env.DSH_REMOTE_SERVER;
-  const serverUrl = configuredServerUrl === void 0 ? void 0 : normalizeServerUrl(configuredServerUrl);
-  const initialDelayMs = reconnect.initialDelayMs ?? 1e3;
-  const maxDelayMs = reconnect.maxDelayMs ?? 3e4;
-  if (maxDelayMs < initialDelayMs) {
-    throw new TypeError("reconnect.maxDelayMs must be greater than or equal to reconnect.initialDelayMs");
-  }
-  return {
-    enabled: parsed.enabled ?? true,
-    role: parsed.role ?? "host",
-    ...serverUrl === void 0 ? {} : { serverUrl },
-    deviceName: parsed.deviceName ?? env.DSH_REMOTE_DEVICE_NAME ?? hostname3(),
-    hostControl: { enabled: parsed.hostControl?.enabled ?? true },
-    terminal: { enabled: parsed.terminal?.enabled ?? (env.DSH_REMOTE_TERMINAL_ENABLED === void 0 || env.DSH_REMOTE_TERMINAL_ENABLED === "true") },
-    remoteTools: { enabled: parsed.remoteTools?.enabled ?? true },
-    loopback: { ports: [...new Set(parsed.loopback?.ports ?? [])] },
-    forceRelay: parsed.forceRelay ?? false,
-    rotatePinnedPeerKey: parsed.rotatePinnedPeerKey ?? false,
-    logLevel: parsed.logLevel ?? "info",
-    reconnect: {
-      enabled: parsed.reconnect !== false,
-      initialDelayMs,
-      maxDelayMs,
-      jitter: reconnect.jitter ?? 0.2
-    },
-    codex: {
-      enabled: acpEnabled && codexEnabled,
-      binary: codexBackend?.command ?? parsed.codex?.binary ?? "codex"
-    },
-    cursor: {
-      enabled: cursorEnabled,
-      binary: configuredCursorBackend?.command ?? parsed.cursor?.binary ?? env.DSH_REMOTE_CURSOR_BINARY ?? env.DSH_REMOTE_ACP_BINARY ?? "agent"
-    },
-    acp: {
-      enabled: acpEnabled,
-      backends: [.../* @__PURE__ */ new Set(["codex", "cursor", "antigravity", "pi", "claude", "opencode", ...parsed.acp?.backends?.filter((item) => item.id !== "kimi").map((item) => item.id) ?? []])].map((id6) => {
-        const configured = parsed.acp?.backends?.find((item) => item.id === id6);
-        const legacy = parsed.acp?.backend === id6 ? parsed.acp : void 0;
-        const defaults = { codex: "codex", cursor: "agent", antigravity: "agy", pi: "pi-acp", claude: "claude-agent-acp", opencode: "opencode" };
-        const cursorCommand = id6 === "codex" ? parsed.codex?.binary : id6 === "cursor" ? parsed.cursor?.binary ?? env.DSH_REMOTE_CURSOR_BINARY ?? env.DSH_REMOTE_ACP_BINARY : void 0;
-        const cwd2 = configured?.cwd ?? legacy?.cwd;
-        return {
-          id: id6,
-          enabled: configured?.enabled ?? legacy?.enabled ?? (id6 === "codex" ? codexEnabled : id6 === "cursor" ? cursorEnabled : id6 === "pi" ? true : id6 === "claude" ? true : id6 === "opencode" ? true : parsed.acp !== void 0),
-          command: configured?.command ?? legacy?.command ?? cursorCommand ?? defaults[id6] ?? id6,
-          args: id6 === "codex" ? ["app-server"] : configured?.args ?? legacy?.args ?? (id6 === "pi" || id6 === "claude" ? [] : id6 === "antigravity" ? ["--input-format", "stream-json", "--output-format", "stream-json"] : ["acp"]),
-          ...cwd2 === void 0 ? {} : { cwd: cwd2 }
-        };
-      })
-    }
-  };
-}
-var LOCAL_HOSTS = /* @__PURE__ */ new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
-function isPrivateNetworkHostname(hostname6) {
-  if (LOCAL_HOSTS.has(hostname6)) return true;
-  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname6);
-  if (match === null) return false;
-  const octets = match.slice(1).map(Number);
-  if (octets.some((value) => value > 255)) return false;
-  const [a, b] = octets;
-  return a === 10 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168 || a === 169 && b === 254 || a === 100 && b >= 64 && b <= 127;
-}
-function normalizeServerUrl(value) {
-  const url2 = new URL(value);
-  const privateHttp = url2.protocol === "http:" && isPrivateNetworkHostname(url2.hostname);
-  if (url2.protocol !== "https:" && !privateHttp) {
-    throw new TypeError("serverUrl must use HTTPS (HTTP is allowed only for localhost or private-network addresses)");
-  }
-  if (url2.username !== "" || url2.password !== "") {
-    throw new TypeError("serverUrl must not contain credentials");
-  }
-  if (url2.search !== "" || url2.hash !== "") {
-    throw new TypeError("serverUrl must not contain query parameters or fragments");
-  }
-  if (url2.pathname !== "" && url2.pathname !== "/") {
-    throw new TypeError("serverUrl must be an origin without a path");
-  }
-  return url2.origin;
-}
-
-// src/version.ts
-var PLUGIN_VERSION = "0.6.0";
 
 // src/server-api.ts
 var TERMINAL_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/u;
@@ -92477,7 +93529,7 @@ import { networkInterfaces as networkInterfaces2 } from "node:os";
 // src/native-rtc-helper.ts
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { delimiter, dirname as dirname3, join as join4 } from "node:path";
+import { delimiter, dirname as dirname4, join as join5 } from "node:path";
 import { fileURLToPath } from "node:url";
 var cachedExternalFactory;
 var cachedExternalFactoryResolved = false;
@@ -92528,21 +93580,21 @@ function nodeBinaryCandidates() {
   add3(process.env.DSH_REMOTE_NODE);
   add3(process.env.NODE);
   add3(process.execPath);
-  for (const part of (process.env.PATH ?? "").split(delimiter)) add3(join4(part, process.platform === "win32" ? "node.exe" : "node"));
+  for (const part of (process.env.PATH ?? "").split(delimiter)) add3(join5(part, process.platform === "win32" ? "node.exe" : "node"));
   add3("/opt/homebrew/bin/node");
   add3("/usr/local/bin/node");
   add3("/usr/bin/node");
-  add3(join4(process.env.HOME ?? "", ".volta", "bin", process.platform === "win32" ? "node.exe" : "node"));
-  add3(join4(process.env.HOME ?? "", ".asdf", "shims", process.platform === "win32" ? "node.exe" : "node"));
-  add3(join4(process.env.HOME ?? "", ".local", "bin", process.platform === "win32" ? "node.exe" : "node"));
+  add3(join5(process.env.HOME ?? "", ".volta", "bin", process.platform === "win32" ? "node.exe" : "node"));
+  add3(join5(process.env.HOME ?? "", ".asdf", "shims", process.platform === "win32" ? "node.exe" : "node"));
+  add3(join5(process.env.HOME ?? "", ".local", "bin", process.platform === "win32" ? "node.exe" : "node"));
   for (const nvmNode of nvmNodeCandidates()) add3(nvmNode);
   return candidates;
 }
 function nvmNodeCandidates() {
-  const root = join4(process.env.HOME ?? "", ".nvm", "versions", "node");
+  const root = join5(process.env.HOME ?? "", ".nvm", "versions", "node");
   if (root === "" || !existsSync(root)) return [];
   try {
-    return readdirSync(root).map((version2) => join4(root, version2, "bin", process.platform === "win32" ? "node.exe" : "node")).sort((left, right) => right.localeCompare(left, "en", { numeric: true }));
+    return readdirSync(root).map((version2) => join5(root, version2, "bin", process.platform === "win32" ? "node.exe" : "node")).sort((left, right) => right.localeCompare(left, "en", { numeric: true }));
   } catch {
     return [];
   }
@@ -92564,7 +93616,7 @@ function isUsableExternalNode(candidate, requireFrom) {
       "console.log(`node:${process.versions.node}`);"
     ].join("")
   ], {
-    cwd: dirname3(requireFrom),
+    cwd: dirname4(requireFrom),
     env,
     encoding: "utf8",
     timeout: 3e3
@@ -92586,7 +93638,7 @@ var ExternalNativePeerConnection = class {
     this.nodeBinary = nodeBinary;
     this.requireFrom = requireFrom;
     this.child = spawn(this.nodeBinary, ["--input-type=module", "--eval", HELPER_SOURCE], {
-      cwd: dirname3(this.requireFrom),
+      cwd: dirname4(this.requireFrom),
       env: { ...process.env, DSH_REMOTE_RTC_HELPER_REQUIRE_FROM: this.requireFrom },
       stdio: ["pipe", "pipe", "pipe"]
     });
@@ -93612,7 +94664,12 @@ var ClientModeRuntime = class {
         return owner.host;
       },
       setHostAuthorization: (...args) => owner.setHostAuthorization(...args),
-      setMode: (...args) => owner.setMode(...args)
+      setMode: (...args) => owner.setMode(...args),
+      listDirectHosts: () => owner.listDirectHosts(),
+      addDirectHost: (...args) => owner.addDirectHost(...args),
+      removeDirectHost: (...args) => owner.removeDirectHost(...args),
+      connectDirect: (...args) => owner.connectDirect(...args),
+      disconnectDirect: () => owner.disconnectDirect()
     });
     this.codexStreamBridge = new ClientCodexStreams({
       activeRemote: (...args) => owner.activeRemote(...args),
@@ -93647,6 +94704,8 @@ var ClientModeRuntime = class {
   connection;
   control;
   codexStreamBridge;
+  /** Lazily created so identity-store fixtures without a directory keep working. */
+  directHostStore;
   preview;
   identity;
   connected;
@@ -93724,7 +94783,7 @@ var ClientModeRuntime = class {
       recoveryGeneration: this.recoveryGeneration,
       transport: this.connected?.client.getStats().mode ?? "Disconnected",
       connectedTargetDeviceId: this.connected?.target.deviceId,
-      preferredTransports: this.config.forceRelay ? ["relay"] : ["lan", "p2p", "turn", "relay"],
+      preferredTransports: this.connected?.direct === true || this.connectionProgress?.activeTransports?.includes("direct") === true ? ["direct"] : this.config.forceRelay ? ["relay"] : ["lan", "p2p", "turn", "relay"],
       ...this.connectionProgress === void 0 ? {} : {
         connectionProgress: {
           targetDeviceId: this.connectionProgress.targetDeviceId,
@@ -93744,9 +94803,152 @@ var ClientModeRuntime = class {
     this.preview = void 0;
     await preview?.close();
   }
+  /** Shape the Direct carrier details like the Server-negotiated network panel. */
+  async directNetworkDetails(connected) {
+    const identity3 = this.identity;
+    if (identity3 === void 0) return this.status();
+    const details2 = await connected.transport.connectionDetails().catch(() => void 0);
+    if (this.connected !== connected || details2 === void 0) return this.status();
+    return {
+      ...this.status(),
+      network: {
+        ...details2.connectionId === void 0 ? {} : { connectionId: details2.connectionId },
+        ...details2.connectedAt === void 0 ? {} : { connectedAt: details2.connectedAt },
+        controlChannelUrl: details2.endpoint,
+        controlChannelState: details2.socketState,
+        preferredTransports: ["direct"],
+        ...details2.heartbeatIntervalMs === void 0 ? {} : { heartbeatIntervalMs: details2.heartbeatIntervalMs },
+        ...details2.lastReceivedAt === void 0 ? {} : { lastReceivedAt: details2.lastReceivedAt },
+        local: { deviceId: identity3.deviceId, name: identity3.name, platform: process.platform },
+        remote: {
+          deviceId: connected.target.deviceId,
+          name: connected.target.name,
+          platform: connected.target.platform
+        }
+      }
+    };
+  }
+  async listDirectHosts() {
+    await this.ensureDirectHosts().load();
+    return this.directHostsView();
+  }
+  async addDirectHost(hostDeviceId, endpoint) {
+    await this.ensureDirectHosts().load();
+    try {
+      await this.ensureDirectHosts().upsert({ hostDeviceId, endpoint });
+    } catch (error62) {
+      throw directStoreError(error62);
+    }
+    return this.directHostsView();
+  }
+  async removeDirectHost(hostDeviceId) {
+    await this.ensureDirectHosts().load();
+    try {
+      await this.ensureDirectHosts().remove(hostDeviceId);
+    } catch (error62) {
+      throw directStoreError(error62);
+    }
+    return this.directHostsView();
+  }
+  /**
+   * Connect to a saved Host over its tailnet address with no Server in the
+   * runtime path. The pinned identity key authenticates the Noise IK peer; the
+   * resulting carrier is registered exactly like the Server path so every
+   * existing remote workspace/session API keeps working.
+   */
+  async connectDirect(input4, signal) {
+    if (this.closed) throw new ClientModeError("CANCELLED", "The Remote runtime is closed.");
+    this.requireIdentity();
+    const target3 = this.identities.trustedPeer(input4.hostDeviceId);
+    if (target3 === void 0) {
+      throw new ClientModeError("DIRECT_HOST_UNKNOWN", "Authorize this Host through the Server before connecting directly.");
+    }
+    await this.ensureDirectHosts().load();
+    const stored = this.ensureDirectHosts().get(input4.hostDeviceId);
+    const endpoint = (input4.endpoint ?? stored?.endpoint ?? "").trim();
+    if (endpoint === "") throw new ClientModeError("INVALID_MESSAGE", "A Direct host address is required.");
+    if (stored !== void 0 && stored.publicKey !== target3.publicKey) {
+      throw new ClientModeError("DIRECT_HOST_UNPINNED", "The saved Direct host no longer matches the pinned Host identity.");
+    }
+    let normalized;
+    try {
+      normalized = normalizeDirectEndpoint(endpoint);
+    } catch (error62) {
+      throw directStoreError(error62);
+    }
+    const selection = this.beginSelection(signal);
+    const lifetime = this.remoteLifetime.signal;
+    const next = await this.connection.connectDirect(target3, normalized, selection);
+    try {
+      this.assertRemoteCompatible(next);
+    } catch (error62) {
+      this.connection.clearConnectionProgress(next.progressRunId);
+      await next.client.close().catch(() => void 0);
+      throw error62;
+    }
+    const previous = this.connected;
+    await this.closePreview();
+    if (selection.aborted || lifetime.aborted || this.closed) {
+      await next.client.close().catch(() => void 0);
+      throw new ClientModeError("CANCELLED", "The Direct connection request was superseded or closed.");
+    }
+    this.connected = next;
+    next.client.onClose((error62) => this.handleRemoteClose(next, error62));
+    if (next.client.getStats().connected !== true) {
+      this.connected = void 0;
+      this.gatewaySwitch.disconnectRemote();
+      this.connection.clearConnectionProgress(next.progressRunId);
+      await next.client.close().catch(() => void 0);
+      throw new ClientModeError("TRANSPORT_CLOSED", "The Direct connection closed before it became ready.", true);
+    }
+    this.connection.clearConnectionProgress(next.progressRunId);
+    this.pendingWorkspaceSelection = void 0;
+    await this.closeCodexVirtual();
+    this.assertRemoteCurrent(next, selection);
+    await this.closeCursorVirtual();
+    this.assertRemoteCurrent(next, selection);
+    this.gatewaySwitch.selectRemote(this.remoteTypertGateway(next), void 0, {
+      deviceId: next.target.deviceId,
+      name: next.target.name
+    });
+    await this.codexStreamBridge.closeCodexStreams(previous?.client);
+    await previous?.client.close().catch(() => void 0);
+    await this.ensureDirectHosts().markConnected(target3.deviceId).catch(() => void 0);
+    this.logger.info("Harness target switched", { mode: "remote", targetDeviceId: shortId(next.target.deviceId), transport: "Direct" });
+    return this.status();
+  }
+  /** Leave a Direct carrier; the Server path is untouched. */
+  async disconnectDirect() {
+    if (this.connected?.direct !== true) return this.status();
+    this.reconnect.cancel();
+    this.recoverable = void 0;
+    await this.leaveRemote();
+    return this.status();
+  }
+  ensureDirectHosts() {
+    return this.directHostStore ??= new DirectHostStore({ identities: this.identities });
+  }
+  directHostsView() {
+    return {
+      hosts: this.ensureDirectHosts().list().map((entry) => ({
+        hostDeviceId: entry.hostDeviceId,
+        hostName: entry.hostName,
+        ...entry.platform === void 0 ? {} : { platform: entry.platform },
+        endpoint: entry.endpoint,
+        addedAt: entry.addedAt,
+        ...entry.lastConnectedAt === void 0 ? {} : { lastConnectedAt: entry.lastConnectedAt }
+      })),
+      candidates: this.identities.listTrustedPeers().map((peer) => ({
+        hostDeviceId: peer.deviceId,
+        name: peer.name,
+        platform: peer.platform
+      }))
+    };
+  }
   async detailedStatus() {
     const connected = this.connected;
     if (connected === void 0 || this.identity === void 0) return this.status();
+    if (connected.direct === true) return this.directNetworkDetails(connected);
     const details2 = await connected.transport.connectionDetails();
     if (this.connected !== connected) return this.status();
     return {
@@ -94350,7 +95552,7 @@ var ClientModeRuntime = class {
   }
   handleRemoteClose(remote, error62) {
     if (this.connected !== remote) return;
-    const recover = this.recoverable === remote;
+    const recover = this.recoverable === remote && remote.direct !== true;
     this.recoverable = void 0;
     this.connected = void 0;
     this.connectionProgress = void 0;
@@ -94382,6 +95584,14 @@ var ClientModeRuntime = class {
     }, error62);
   }
 };
+function directStoreError(error62) {
+  if (error62 instanceof ClientModeError) return error62;
+  if (error62 instanceof DirectHostStoreError) return new ClientModeError(error62.code, error62.message);
+  return new ClientModeError(
+    "DIRECT_HOSTS_INVALID",
+    error62 instanceof Error ? error62.message : "The Direct host request failed."
+  );
+}
 
 // src/control-runtime.ts
 import { hostname as hostname4 } from "node:os";
@@ -94389,9 +95599,9 @@ import { execFileSync } from "node:child_process";
 
 // src/identity-store.ts
 import { createHash as createHash5 } from "node:crypto";
-import { chmod as chmod2, mkdir as mkdir3, readFile as readFile3, rename as rename2, rm as rm3, stat as stat2, writeFile as writeFile2 } from "node:fs/promises";
+import { chmod as chmod3, mkdir as mkdir4, readFile as readFile4, rename as rename3, rm as rm3, stat as stat2, writeFile as writeFile3 } from "node:fs/promises";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname4, join as join5 } from "node:path";
+import { dirname as dirname5, join as join6 } from "node:path";
 var identitySchema = external_exports.object({
   schemaVersion: external_exports.literal(1),
   deviceId: external_exports.string().uuid(),
@@ -94420,14 +95630,14 @@ var IdentityStore = class {
   peers = /* @__PURE__ */ new Map();
   constructor(options = {}) {
     const env = options.env ?? process.env;
-    const dshHome = env.DSH_HOME || join5(options.homeDirectory ?? homedir2(), ".dsh");
-    this.directory = options.directory ?? join5(dshHome, "remote");
+    const dshHome = env.DSH_HOME || join6(options.homeDirectory ?? homedir2(), ".dsh");
+    this.directory = options.directory ?? join6(dshHome, "remote");
   }
   async loadOrCreate(deviceName) {
-    await mkdir3(this.directory, { recursive: true, mode: 448 });
-    await chmod2(this.directory, 448);
-    const devicePath = join5(this.directory, "device.json");
-    const keyPath = join5(this.directory, "device.key");
+    await mkdir4(this.directory, { recursive: true, mode: 448 });
+    await chmod3(this.directory, 448);
+    const devicePath = join6(this.directory, "device.json");
+    const keyPath = join6(this.directory, "device.key");
     const [hasDevice, hasKey] = await Promise.all([exists2(devicePath), exists2(keyPath)]);
     if (hasDevice !== hasKey) {
       throw new IdentityInvalidError("device identity is incomplete; repair it explicitly before reconnecting");
@@ -94435,21 +95645,21 @@ var IdentityStore = class {
     if (!hasDevice) {
       const keys = generateKeyPair();
       const record11 = { schemaVersion: 1, deviceId: uuidV7(), name: deviceName, publicKey: keys.publicKey };
-      await atomicJsonWrite(devicePath, record11, 384);
+      await atomicJsonWrite2(devicePath, record11, 384);
       await atomicTextWrite(keyPath, `${keys.privateKey}
 `, 384);
     }
     await assertPrivateMode2(keyPath);
     try {
-      let record11 = identitySchema.parse(JSON.parse(await readFile3(devicePath, "utf8")));
-      const privateKey = (await readFile3(keyPath, "utf8")).trim();
+      let record11 = identitySchema.parse(JSON.parse(await readFile4(devicePath, "utf8")));
+      const privateKey = (await readFile4(keyPath, "utf8")).trim();
       const regenerated = generateKeyPair(fromBase64Url2(privateKey));
       if (regenerated.publicKey !== record11.publicKey) {
         throw new IdentityInvalidError("device public and private keys do not match");
       }
       if (record11.name !== deviceName) {
         record11 = { ...record11, name: deviceName };
-        await atomicJsonWrite(devicePath, record11, 384);
+        await atomicJsonWrite2(devicePath, record11, 384);
       }
       this.identity = { ...record11, privateKey, fingerprint: fingerprint2(record11.publicKey) };
       await this.loadPeers();
@@ -94496,11 +95706,11 @@ var IdentityStore = class {
     return removed;
   }
   async loadPeers() {
-    const path = join5(this.directory, "trusted-peers.json");
+    const path = join6(this.directory, "trusted-peers.json");
     if (!await exists2(path)) {
-      await atomicJsonWrite(path, { schemaVersion: 1, peers: [] }, 384);
+      await atomicJsonWrite2(path, { schemaVersion: 1, peers: [] }, 384);
     }
-    const parsed = trustedPeersSchema.parse(JSON.parse(await readFile3(path, "utf8")));
+    const parsed = trustedPeersSchema.parse(JSON.parse(await readFile4(path, "utf8")));
     const peers = /* @__PURE__ */ new Map();
     for (const peer of parsed.peers) {
       if (peer.fingerprint !== fingerprint2(peer.publicKey)) {
@@ -94512,7 +95722,7 @@ var IdentityStore = class {
     this.peers = peers;
   }
   async savePeers() {
-    await atomicJsonWrite(join5(this.directory, "trusted-peers.json"), {
+    await atomicJsonWrite2(join6(this.directory, "trusted-peers.json"), {
       schemaVersion: 1,
       peers: [...this.peers.values()]
     }, 384);
@@ -94521,7 +95731,7 @@ var IdentityStore = class {
 function serverStorageDirectory(root, serverUrl, role) {
   const origin = new URL(serverUrl).origin;
   const scope2 = createHash5("sha256").update(origin).digest("hex").slice(0, 24);
-  return join5(root, "servers", scope2, role);
+  return join6(root, "servers", scope2, role);
 }
 function fingerprint2(publicKey) {
   const compact = createHash5("sha256").update(fromBase64Url2(publicKey)).digest("hex").slice(0, 12).toUpperCase();
@@ -94534,28 +95744,28 @@ async function assertPrivateMode2(path) {
     throw new IdentityInvalidError(`private key permissions must be 0600, got ${mode2.toString(8).padStart(3, "0")}`);
   }
 }
-async function atomicJsonWrite(path, value, mode2) {
+async function atomicJsonWrite2(path, value, mode2) {
   await atomicTextWrite(path, `${JSON.stringify(value, null, 2)}
 `, mode2);
 }
 async function atomicTextWrite(path, value, mode2) {
-  await mkdir3(dirname4(path), { recursive: true, mode: 448 });
+  await mkdir4(dirname5(path), { recursive: true, mode: 448 });
   const temporary = `${path}.${process.pid}.${uuidV7()}.tmp`;
-  await writeFile2(temporary, value, { encoding: "utf8", mode: mode2, flag: "wx" });
-  await chmod2(temporary, mode2);
-  await rename2(temporary, path);
-  await chmod2(path, mode2);
+  await writeFile3(temporary, value, { encoding: "utf8", mode: mode2, flag: "wx" });
+  await chmod3(temporary, mode2);
+  await rename3(temporary, path);
+  await chmod3(path, mode2);
 }
 async function exists2(path) {
   try {
     await stat2(path);
     return true;
   } catch (error62) {
-    if (isNodeError(error62) && error62.code === "ENOENT") return false;
+    if (isNodeError2(error62) && error62.code === "ENOENT") return false;
     throw error62;
   }
 }
-function isNodeError(error62) {
+function isNodeError2(error62) {
   return error62 instanceof Error && "code" in error62;
 }
 function safeErrorMessage(error62) {
@@ -94710,7 +95920,7 @@ import { randomUUID as randomUUID13 } from "node:crypto";
 import { accessSync, constants as constants2, existsSync as existsSync2, readFileSync } from "node:fs";
 import { readdir, realpath, stat as stat3 } from "node:fs/promises";
 import { homedir as homedir3 } from "node:os";
-import { basename as basename3, isAbsolute as isAbsolute3, join as join6, relative, resolve } from "node:path";
+import { basename as basename3, isAbsolute as isAbsolute3, join as join7, relative, resolve } from "node:path";
 
 // src/codex/app-server.ts
 import { spawn as spawn2 } from "node:child_process";
@@ -96490,15 +97700,15 @@ function codexBinaryCandidates(configured, hostPlatform = process.platform, user
   if (configured !== "codex" || hostPlatform !== "darwin") return [configured];
   const bundledCandidates = [
     "/Applications/ChatGPT.app",
-    join6(userHome, "Applications", "ChatGPT.app")
+    join7(userHome, "Applications", "ChatGPT.app")
   ].flatMap((chatGptApp) => {
-    const codexCli = join6(chatGptApp, "Contents", "Resources", "codex-cli");
+    const codexCli = join7(chatGptApp, "Contents", "Resources", "codex-cli");
     try {
-      const manifest = JSON.parse(readFileSync(join6(codexCli, "codex-package.json"), "utf8"));
+      const manifest = JSON.parse(readFileSync(join7(codexCli, "codex-package.json"), "utf8"));
       if (!isRecord13(manifest) || typeof manifest.entrypoint !== "string" || manifest.entrypoint.length === 0) {
         return [];
       }
-      const candidate = join6(codexCli, manifest.entrypoint);
+      const candidate = join7(codexCli, manifest.entrypoint);
       if (!existsSync2(candidate)) return [];
       accessSync(candidate, constants2.X_OK);
       return [candidate];
@@ -96509,7 +97719,7 @@ function codexBinaryCandidates(configured, hostPlatform = process.platform, user
   return [.../* @__PURE__ */ new Set([
     ...bundledCandidates,
     "/Applications/ChatGPT.app/Contents/Resources/codex",
-    join6(userHome, "Applications", "ChatGPT.app", "Contents", "Resources", "codex"),
+    join7(userHome, "Applications", "ChatGPT.app", "Contents", "Resources", "codex"),
     configured
   ])];
 }
@@ -97556,7 +98766,7 @@ var IsolatedAcpClient = class {
 
 // src/workspace-bridge.ts
 import { realpath as realpath2, lstat, readdir as readdir2, open as open4, stat as stat4, watch } from "node:fs/promises";
-import { isAbsolute as isAbsolute5, join as join8, relative as relative2, resolve as resolve2 } from "node:path";
+import { isAbsolute as isAbsolute5, join as join9, relative as relative2, resolve as resolve2 } from "node:path";
 
 // src/remote-terminal-controller.ts
 var import_headless = __toESM(require_xterm_headless(), 1);
@@ -97567,7 +98777,7 @@ import { spawn as spawn4 } from "node:child_process";
 import { access } from "node:fs/promises";
 import { constants as constants3 } from "node:fs";
 import { userInfo } from "node:os";
-import { delimiter as delimiter2, isAbsolute as isAbsolute4, join as join7 } from "node:path";
+import { delimiter as delimiter2, isAbsolute as isAbsolute4, join as join8 } from "node:path";
 import { PassThrough } from "node:stream";
 function profile(path) {
   const name2 = path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1);
@@ -97577,7 +98787,7 @@ function profile(path) {
 async function localExecutable(file2, _env, signal) {
   signal?.throwIfAborted();
   const extensions = process.platform === "win32" && !/\.[^\\/]+$/.test(file2) ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";") : [""];
-  const paths = isAbsolute4(file2) ? [file2] : (process.env.PATH ?? "").split(delimiter2).filter(Boolean).map((dir) => join7(dir, file2));
+  const paths = isAbsolute4(file2) ? [file2] : (process.env.PATH ?? "").split(delimiter2).filter(Boolean).map((dir) => join8(dir, file2));
   for (const path of paths) for (const extension of extensions) {
     try {
       await access(path + extension, process.platform === "win32" ? constants3.F_OK : constants3.X_OK);
@@ -98237,7 +99447,7 @@ var WorkspaceBridge = class {
         const entries = await readdir2(target3, { withFileTypes: true });
         const result = [];
         for (const entry of entries.slice(0, 500)) {
-          const item = join8(target3, entry.name);
+          const item = join9(target3, entry.name);
           const info2 = await lstat(item);
           if (info2.isSymbolicLink()) continue;
           result.push({ name: entry.name, type: info2.isDirectory() ? "directory" : info2.isFile() ? "file" : "other", ...info2.isFile() ? { size: info2.size } : {} });
@@ -98505,7 +99715,7 @@ var AcpWorkspaceTools = class {
 import { randomUUID as randomUUID15 } from "node:crypto";
 import { readdir as readdir3, realpath as realpath5, stat as stat5 } from "node:fs/promises";
 import { homedir as homedir6 } from "node:os";
-import { basename as basename5, isAbsolute as isAbsolute7, join as join12, relative as relative4, resolve as resolve4 } from "node:path";
+import { basename as basename5, isAbsolute as isAbsolute7, join as join13, relative as relative4, resolve as resolve4 } from "node:path";
 
 // src/acp/adapters/claude-process.ts
 import { Buffer as Buffer5 } from "node:buffer";
@@ -98757,9 +99967,9 @@ var PiAcpClient = class extends IsolatedAcpClient {
 };
 
 // src/acp/adapters/antigravity/models.ts
-import { execFile } from "node:child_process";
+import { execFile as execFile2 } from "node:child_process";
 import { promisify } from "node:util";
-var exec = promisify(execFile);
+var exec = promisify(execFile2);
 function cachedAgyModels(load) {
   let catalog;
   let pending;
@@ -98817,12 +100027,12 @@ function agySelectionArgs(catalog, modelId, effort) {
 // src/acp/adapters/antigravity/image-store.ts
 import { promises as fs, realpathSync as realpathSync2, constants as constants4 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join as join9, basename as basename4 } from "node:path";
+import { join as join10, basename as basename4 } from "node:path";
 import { createHash as createHash6, randomUUID as randomUUID14 } from "node:crypto";
 var EXTENSIONS = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
 var IMAGE_NAME = /^[0-9a-f-]{36}\.(png|jpg|webp|gif)$/;
 var TTL = 24 * 60 * 60 * 1e3;
-var AGY_IMAGE_ROOT = join9(realpathSync2(tmpdir()), `dsh-remote-agy-images-${process.getuid?.() ?? "user"}`);
+var AGY_IMAGE_ROOT = join10(realpathSync2(tmpdir()), `dsh-remote-agy-images-${process.getuid?.() ?? "user"}`);
 var stagingChain = Promise.resolve();
 var sessionFolder = (sessionId) => createHash6("sha256").update(sessionId).digest("hex");
 async function privateDirectory(path) {
@@ -98844,12 +100054,12 @@ async function stageImages(sessionId, images, root) {
   let total = 0;
   for (const entry of await fs.readdir(root)) {
     if (!/^[0-9a-f]{64}$/.test(entry)) continue;
-    const dir = join9(root, entry);
+    const dir = join10(root, entry);
     const info = await fs.lstat(dir);
     if (!info.isDirectory() || info.isSymbolicLink()) continue;
     for (const name2 of await fs.readdir(dir)) {
       if (!IMAGE_NAME.test(name2)) continue;
-      const path = join9(dir, name2);
+      const path = join10(dir, name2);
       const file2 = await fs.lstat(path);
       if (!file2.isFile() || file2.isSymbolicLink()) continue;
       if (Date.now() - file2.mtimeMs > TTL) await fs.unlink(path);
@@ -98858,12 +100068,12 @@ async function stageImages(sessionId, images, root) {
   }
   const parsed = images.map(parseAcpImage);
   if (total + parsed.reduce((sum, image) => sum + imageByteLength(image.data), 0) > 512 * 1024 * 1024) throw new Error("AGY temporary image cache is full.");
-  const directory = join9(root, sessionFolder(sessionId));
+  const directory = join10(root, sessionFolder(sessionId));
   await privateDirectory(directory);
   const paths = [];
   try {
     for (const image of parsed) {
-      const path = join9(directory, `${randomUUID14()}.${EXTENSIONS[image.mimeType]}`);
+      const path = join10(directory, `${randomUUID14()}.${EXTENSIONS[image.mimeType]}`);
       await fs.writeFile(path, Buffer.from(image.data, "base64"), { flag: "wx", mode: 384 });
       paths.push(path);
     }
@@ -98895,10 +100105,10 @@ function agyImageReferences(text) {
 }
 async function readAgyImage(sessionId, path, root = AGY_IMAGE_ROOT) {
   const name2 = basename4(path);
-  if (!IMAGE_NAME.test(name2) || path !== join9(root, sessionFolder(sessionId), name2)) return void 0;
+  if (!IMAGE_NAME.test(name2) || path !== join10(root, sessionFolder(sessionId), name2)) return void 0;
   try {
     await privateDirectory(root);
-    await privateDirectory(join9(root, sessionFolder(sessionId)));
+    await privateDirectory(join10(root, sessionFolder(sessionId)));
     const info = await fs.lstat(path);
     if (!info.isFile() || info.isSymbolicLink() || info.size > 8 * 1024 * 1024 || Date.now() - info.mtimeMs > TTL) return void 0;
     const file2 = await fs.open(path, constants4.O_RDONLY | (constants4.O_NOFOLLOW ?? 0));
@@ -98923,17 +100133,17 @@ import { existsSync as existsSync3 } from "node:fs";
 
 // src/acp/adapters/antigravity/transcript-watcher.ts
 import { promises as fs2 } from "node:fs";
-import { join as join10 } from "node:path";
+import { join as join11 } from "node:path";
 import { EventEmitter as EventEmitter2 } from "node:events";
 import { homedir as homedir4 } from "node:os";
 var TranscriptWatcher = class extends EventEmitter2 {
-  constructor(conversationId, baseDir = join10(homedir4(), ".gemini/antigravity-cli/brain")) {
+  constructor(conversationId, baseDir = join11(homedir4(), ".gemini/antigravity-cli/brain")) {
     super();
     this.conversationId = conversationId;
     this.baseDir = baseDir;
-    const brainDir = join10(this.baseDir, conversationId, ".system_generated/logs");
-    this.transcriptPath = join10(brainDir, "transcript.jsonl");
-    this.transcriptFullPath = join10(brainDir, "transcript_full.jsonl");
+    const brainDir = join11(this.baseDir, conversationId, ".system_generated/logs");
+    this.transcriptPath = join11(brainDir, "transcript.jsonl");
+    this.transcriptFullPath = join11(brainDir, "transcript_full.jsonl");
   }
   offset = 0;
   lineRemainder = "";
@@ -99662,10 +100872,10 @@ import { realpath as realpath4 } from "node:fs/promises";
 import { randomBytes as randomBytes11 } from "node:crypto";
 import { createServer as createServer3 } from "node:net";
 import { realpath as realpath3 } from "node:fs/promises";
-import { execFile as execFile2 } from "node:child_process";
+import { execFile as execFile3 } from "node:child_process";
 import { promisify as promisify2, stripVTControlCharacters } from "node:util";
 var MAX_RESPONSE_BYTES = 64 * 1024;
-var execFileAsync = promisify2(execFile2);
+var execFileAsync = promisify2(execFile3);
 async function opencodeHasNativeApi(binary, args, cwd2, signal) {
   try {
     const { stdout, stderr } = await execFileAsync(binary, [...opencodePrivateArgs(args), "--help"], {
@@ -100321,7 +101531,7 @@ function isSessionMutation(method) {
 
 // src/acp/adapters/antigravity/transcript-loader.ts
 import { promises as fs3 } from "node:fs";
-import { isAbsolute as isAbsolute6, join as join11, relative as relative3, resolve as resolve3, sep } from "node:path";
+import { isAbsolute as isAbsolute6, join as join12, relative as relative3, resolve as resolve3, sep } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { homedir as homedir5 } from "node:os";
 import { createRequire as createRequire2 } from "node:module";
@@ -100335,7 +101545,7 @@ function cleanUserPrompt(raw) {
   }
   return raw.trim();
 }
-async function loadTranscriptEvents(conversationId, sessionId, baseDir = join11(homedir5(), ".gemini/antigravity-cli/brain")) {
+async function loadTranscriptEvents(conversationId, sessionId, baseDir = join12(homedir5(), ".gemini/antigravity-cli/brain")) {
   let content = "";
   try {
     const filePath = await transcriptPath(baseDir, conversationId);
@@ -100454,9 +101664,9 @@ async function querySqliteJson(dbPath, sql, params = []) {
   } catch {
   }
   try {
-    const { execFile: execFile3 } = await import("node:child_process");
+    const { execFile: execFile4 } = await import("node:child_process");
     const { promisify: promisify3 } = await import("node:util");
-    const execFileAsync2 = promisify3(execFile3);
+    const execFileAsync2 = promisify3(execFile4);
     let formattedSql = sql;
     for (const p of params) {
       const val = typeof p === "number" ? String(p) : `'${String(p).replace(/'/g, "''")}'`;
@@ -100468,7 +101678,7 @@ async function querySqliteJson(dbPath, sql, params = []) {
     return [];
   }
 }
-async function discoverAntigravityWorkspaces(dbPath = join11(homedir5(), ".gemini/antigravity-cli/conversation_summaries.db"), baseDir = join11(homedir5(), ".gemini/antigravity-cli/brain")) {
+async function discoverAntigravityWorkspaces(dbPath = join12(homedir5(), ".gemini/antigravity-cli/conversation_summaries.db"), baseDir = join12(homedir5(), ".gemini/antigravity-cli/brain")) {
   try {
     await fs3.stat(dbPath);
   } catch {
@@ -100531,7 +101741,7 @@ async function readTranscriptSummary(baseDir, conversationId) {
     return void 0;
   }
 }
-async function discoverAntigravitySessions(workspacePath, limit = 30, baseDir = join11(homedir5(), ".gemini/antigravity-cli/brain"), dbPath = join11(homedir5(), ".gemini/antigravity-cli/conversation_summaries.db")) {
+async function discoverAntigravitySessions(workspacePath, limit = 30, baseDir = join12(homedir5(), ".gemini/antigravity-cli/brain"), dbPath = join12(homedir5(), ".gemini/antigravity-cli/conversation_summaries.db")) {
   const requestedWorkspace = workspacePath.trim() === "" ? void 0 : resolve3(workspacePath);
   try {
     await fs3.stat(dbPath);
@@ -100620,7 +101830,7 @@ async function transcriptPath(baseDir, conversationId) {
   if (!/^[a-zA-Z0-9_-]{1,256}$/.test(conversationId)) return void 0;
   try {
     const root = await fs3.realpath(baseDir);
-    const expected = join11(root, conversationId, ".system_generated", "logs", "transcript.jsonl");
+    const expected = join12(root, conversationId, ".system_generated", "logs", "transcript.jsonl");
     return await fs3.realpath(expected) === expected ? expected : void 0;
   } catch {
     return void 0;
@@ -102049,7 +103259,7 @@ var AcpRemoteGateway = class {
   }
   async listDirectory(path) {
     const home = homedir6();
-    const target3 = path.trim() === "~" || path.trim() === "" ? home : path.startsWith("~/") ? join12(home, path.slice(2)) : path;
+    const target3 = path.trim() === "~" || path.trim() === "" ? home : path.startsWith("~/") ? join13(home, path.slice(2)) : path;
     const canonical = await this.requireExistingDirectory(isAbsolute7(target3) ? target3 : resolve4(target3));
     const names = await readdir3(canonical);
     const entries = [];
@@ -102059,7 +103269,7 @@ var AcpRemoteGateway = class {
         truncated = true;
         break;
       }
-      const child = join12(canonical, name2);
+      const child = join13(canonical, name2);
       try {
         const info = await stat5(child);
         if (!info.isDirectory()) continue;
@@ -102168,21 +103378,21 @@ function cursorBinaryCandidates(configured) {
   const userHome = homedir6();
   if (configured === "agy" || configured === "antigravity") {
     return [
-      join12(userHome, ".local", "bin", "agy"),
+      join13(userHome, ".local", "bin", "agy"),
       "agy"
     ];
   }
   if (configured === "agent" || configured === "cursor") {
     return [
-      join12(userHome, ".local", "bin", "agent"),
+      join13(userHome, ".local", "bin", "agent"),
       "agent"
     ];
   }
   if (configured === "opencode") {
     return [
       // Official installer location (curl -fsSL https://opencode.ai/install | bash).
-      join12(userHome, ".opencode", "bin", "opencode"),
-      join12(userHome, ".local", "bin", "opencode"),
+      join13(userHome, ".opencode", "bin", "opencode"),
+      join13(userHome, ".local", "bin", "opencode"),
       "opencode"
     ];
   }
@@ -102248,6 +103458,7 @@ var PluginControlRuntime = class {
       if (endpoint === "settings.acp.set") return ok3(await this.setAcp(payload));
       if (endpoint === "settings.acp.add") return ok3(await this.addAcp(payload));
       if (endpoint === "settings.acp.remove") return ok3(await this.removeAcp(payload));
+      if (endpoint === "settings.direct.set") return ok3(await this.setDirect(payload));
       if (endpoint === "settings.logout") return ok3(await this.logout());
       if (endpoint === "host.authorization.set" && this.client !== void 0) {
         const value = record9(payload);
@@ -102523,6 +103734,7 @@ var PluginControlRuntime = class {
       applies: "restart",
       associations,
       acpAvailability: Object.fromEntries((config2.acp?.backends ?? []).map((item) => [item.id, backendCommandAvailable(item.id, item.command ?? "")])),
+      ...this.host?.directStatus === void 0 ? {} : { direct: this.host.directStatus() },
       ...association === void 0 ? {} : { association }
     };
   }
@@ -102548,6 +103760,26 @@ var PluginControlRuntime = class {
       method: credentials.authorizationMethod,
       ...credentials.account === void 0 ? {} : { account: credentials.account }
     };
+  }
+  async setDirect(payload) {
+    if (this.settings === void 0) {
+      throw new ClientModeError("SETTINGS_UNAVAILABLE", "DSH user settings are unavailable in this profile.");
+    }
+    const value = record9(payload);
+    if (typeof value.enabled !== "boolean") throw new ClientModeError("INVALID_MESSAGE", "A Direct enabled flag is required.");
+    const current = resolveConfig(this.settings.get());
+    const port = value.port === void 0 ? current.direct.port : value.port;
+    if (typeof port !== "number" || !Number.isSafeInteger(port) || port < 1024 || port > 65535) {
+      throw new ClientModeError("INVALID_MESSAGE", "Enter a Direct port between 1024 and 65535.");
+    }
+    const next = resolveConfig({ ...editableConfig(current), direct: { enabled: value.enabled, port } });
+    if (this.host?.setDirect === void 0) {
+      throw new ClientModeError("METHOD_NOT_ALLOWED", "This plugin is not running as a Host.");
+    }
+    await this.settings.replace(editableConfig(next));
+    await this.host.setDirect(next.direct.enabled, next.direct.port);
+    this.config = next;
+    return { ...await this.settingsView(), applies: "live" };
   }
   hostOnlyStatus() {
     return {
@@ -102580,6 +103812,7 @@ function editableConfig(config2) {
     remoteTools: config2.remoteTools,
     hostControl: config2.hostControl ?? { enabled: true },
     loopback: config2.loopback,
+    direct: { enabled: config2.direct.enabled, port: config2.direct.port },
     forceRelay: config2.forceRelay,
     logLevel: config2.logLevel,
     reconnect: config2.reconnect.enabled ? {
@@ -102658,7 +103891,7 @@ function redact(value, key = "") {
 import { randomUUID as randomUUID16 } from "node:crypto";
 import { constants as constants5 } from "node:fs";
 import { link, lstat as lstat2, open as open5, realpath as realpath6, stat as stat6, unlink } from "node:fs/promises";
-import { extname, isAbsolute as isAbsolute8, join as join13 } from "node:path";
+import { extname, isAbsolute as isAbsolute8, join as join14 } from "node:path";
 var WORKSPACE_UPLOAD_BYTES = 20 * 1024 * 1024;
 var WORKSPACE_UPLOAD_CHUNK = 64 * 1024;
 var scope = external_exports.object({ sessionId: external_exports.string().min(1).max(512), uploadId: external_exports.string().uuid() }).strict();
@@ -102737,7 +103970,7 @@ var WorkspaceUploadHost = class {
     const root = await realpath6(sourceRoot);
     const directory = await stat6(root);
     if (!directory.isDirectory()) throw failure4("UPLOAD_WORKSPACE_UNAVAILABLE");
-    const temp = join13(root, `.dsh-upload-${randomUUID16()}.part`);
+    const temp = join14(root, `.dsh-upload-${randomUUID16()}.part`);
     const handle = await open5(temp, constants5.O_CREAT | constants5.O_EXCL | constants5.O_RDWR | (constants5.O_NOFOLLOW ?? 0), 384);
     const upload = { ...p, received: 0, touched: Date.now(), root, sourceRoot, dev: directory.dev, ino: directory.ino, temp, handle };
     this.uploads.set(p.uploadId, upload);
@@ -102781,7 +104014,7 @@ var WorkspaceUploadHost = class {
       await this.validateRoot(upload);
       const name2 = suffix === 0 ? upload.name : `${stem} (${suffix})${extension}`;
       try {
-        await link(upload.temp, join13(upload.root, name2));
+        await link(upload.temp, join14(upload.root, name2));
       } catch (error62) {
         if (error62.code === "EEXIST") continue;
         throw error62;
@@ -103689,7 +104922,7 @@ var HostServerConnection = class {
             try {
               await this.api.refreshCredentials(credentials.accessToken);
             } catch (error62) {
-              finish(asError2(error62));
+              finish(asError3(error62));
               return;
             }
             this.authRecoveryAttempted = true;
@@ -103900,7 +105133,7 @@ var HostServerConnection = class {
       tunnel.channel.receive(payload.counter, fromBase64Url2(payload.ciphertext));
     } catch (error62) {
       await tunnel.channel.close();
-      throw new ControlConnectionError("SECURE_CHANNEL_FAILED", asError2(error62).message);
+      throw new ControlConnectionError("SECURE_CHANNEL_FAILED", asError3(error62).message);
     }
   }
   async handleSignalOffer(payload) {
@@ -103964,7 +105197,7 @@ var HostServerConnection = class {
     void rtc.connect().then(() => {
       this.handleRtcOpened(tunnel, rtc.selectedTransport() ?? "p2p");
     }).catch((error62) => {
-      void this.handleRtcFailed(tunnel, rtc, asError2(error62));
+      void this.handleRtcFailed(tunnel, rtc, asError3(error62));
     });
     rtc.handleSignal({ type: "offer", sdp: payload.sdp });
   }
@@ -104182,7 +105415,7 @@ var HostServerConnection = class {
             ticket: assignment.relayTicket
           }), this.controlFrameLimits));
         } catch (error62) {
-          finish(asError2(error62));
+          finish(asError3(error62));
         }
       };
       socket.onmessage = (event) => {
@@ -104198,11 +105431,11 @@ var HostServerConnection = class {
             return;
           }
           void this.handleDataSocketFrame(tunnel, frame.type, frame.payload).catch((error62) => {
-            finish(asError2(error62));
+            finish(asError3(error62));
             void this.dropTunnel(tunnel.connectionId, "CONNECTION_FAILED");
           });
         } catch (error62) {
-          finish(asError2(error62));
+          finish(asError3(error62));
           void this.dropTunnel(tunnel.connectionId, "CONNECTION_FAILED");
         }
       };
@@ -104456,11 +105689,11 @@ function objectValue(value, key) {
 function shortId3(value) {
   return value.length <= 12 ? value : `${value.slice(0, 8)}\u2026${value.slice(-4)}`;
 }
-function asError2(error62) {
+function asError3(error62) {
   return error62 instanceof Error ? error62 : new Error("Unknown Server connection error.");
 }
 function diagnosticReason3(error62) {
-  const message = asError2(error62).message.replace(/[\r\n]+/g, " ").slice(0, 160);
+  const message = asError3(error62).message.replace(/[\r\n]+/g, " ").slice(0, 160);
   return message || "Unknown Server connection error.";
 }
 function webrtcDiagnosticsLogFields2(diagnostics) {
@@ -104500,19 +105733,546 @@ function closeCode(code) {
   return "CONNECTION_FAILED";
 }
 
+// src/direct-host-listener.ts
+import { createServer as createServer4 } from "node:http";
+import { WebSocketServer as WebSocketServer2, WebSocket as WebSocket4 } from "ws";
+var HOST_PLATFORM = process.platform;
+var DirectHostListener = class {
+  constructor(options) {
+    this.options = options;
+  }
+  servers = [];
+  wsServers = [];
+  sockets = /* @__PURE__ */ new Set();
+  sessions = /* @__PURE__ */ new Set();
+  tailscale = { detected: false, addresses: [], endpoints: [], source: "none" };
+  bindAddresses = [];
+  endpoints = [];
+  lastError;
+  running = false;
+  closed = false;
+  async start() {
+    if (this.running || this.closed) return;
+    this.lastError = void 0;
+    try {
+      this.tailscale = await (this.options.detect ?? (() => detectTailscale({ port: this.options.port })))();
+    } catch {
+      this.tailscale = { detected: false, addresses: [], endpoints: [], source: "none", error: "TAILSCALE_DETECTION_FAILED" };
+    }
+    const addresses = this.options.bindAddresses ?? this.tailscale.addresses.map((item) => item.address);
+    if (addresses.length === 0) {
+      this.lastError = this.tailscale.error ?? "TAILSCALE_NOT_DETECTED";
+      return;
+    }
+    const bound = [];
+    for (const address2 of addresses) {
+      if (!isBindableDirectAddress(address2)) {
+        this.lastError = "DIRECT_ADDRESS_NOT_TAILNET";
+        continue;
+      }
+      try {
+        await this.bindAddress(address2);
+        bound.push(address2);
+      } catch {
+        this.lastError = "DIRECT_BIND_FAILED";
+        this.options.logger.warn("Direct listener bind failed", { code: "DIRECT_BIND_FAILED" });
+      }
+    }
+    this.bindAddresses = bound;
+    this.running = bound.length > 0;
+    this.endpoints = bound.length === 0 ? [] : this.options.bindAddresses === void 0 ? this.tailscale.endpoints.length > 0 ? this.tailscale.endpoints : bound.map((address2) => formatEndpoint(address2, this.options.port)) : bound.map((address2) => formatEndpoint(address2, this.options.port));
+    if (!this.running) {
+      this.lastError ??= "DIRECT_BIND_FAILED";
+      this.options.logger.warn("Direct listener is unavailable", { code: "DIRECT_UNAVAILABLE" });
+      return;
+    }
+    this.options.logger.info("Direct Tailscale listener ready", {
+      port: this.options.port,
+      endpointCount: this.endpoints.length,
+      source: this.tailscale.source
+    });
+  }
+  async stop() {
+    this.closed = true;
+    this.running = false;
+    for (const session2 of [...this.sessions]) session2.shutdown();
+    this.sessions.clear();
+    for (const socket of [...this.sockets]) {
+      try {
+        socket.destroy();
+      } catch {
+      }
+    }
+    this.sockets.clear();
+    const wsServers = this.wsServers;
+    const servers = this.servers;
+    this.wsServers = [];
+    this.servers = [];
+    await Promise.allSettled([
+      ...wsServers.map((server) => new Promise((resolve6) => server.close(() => resolve6()))),
+      ...servers.map((server) => new Promise((resolve6) => server.close(() => resolve6())))
+    ]);
+  }
+  status() {
+    return {
+      enabled: true,
+      running: this.running,
+      port: this.options.port,
+      endpoints: [...this.endpoints],
+      bindAddresses: [...this.bindAddresses],
+      activeConnections: [...this.sessions].filter((session2) => session2.isReady()).length,
+      pendingHandshakes: [...this.sessions].filter((session2) => session2.isPending()).length,
+      tailscale: {
+        detected: this.tailscale.detected,
+        source: this.tailscale.source,
+        ...this.tailscale.backendState === void 0 ? {} : { backendState: this.tailscale.backendState },
+        ...this.tailscale.hostName === void 0 ? {} : { hostName: this.tailscale.hostName },
+        ...this.tailscale.dnsName === void 0 ? {} : { dnsName: this.tailscale.dnsName },
+        ...this.tailscale.error === void 0 ? {} : { error: this.tailscale.error }
+      },
+      ...this.lastError === void 0 ? {} : { error: this.lastError }
+    };
+  }
+  trustedPeer(deviceId) {
+    return this.options.identities.trustedPeer(deviceId);
+  }
+  get identity() {
+    return this.options.identity;
+  }
+  get logger() {
+    return this.options.logger;
+  }
+  get port() {
+    return this.options.port;
+  }
+  get acceptChannel() {
+    return this.options.accept;
+  }
+  sessionClosed(session2) {
+    this.sessions.delete(session2);
+  }
+  notifyCarrierClosed(connectionId, code) {
+    try {
+      void this.options.closeConnection?.(connectionId, code)?.catch?.(() => void 0);
+    } catch {
+    }
+  }
+  canAccept() {
+    const sessions = [...this.sessions];
+    if (sessions.length >= MAX_DIRECT_ACTIVE_CONNECTIONS + MAX_DIRECT_PENDING_HANDSHAKES) return false;
+    return sessions.filter((item) => item.isPending()).length < MAX_DIRECT_PENDING_HANDSHAKES;
+  }
+  async bindAddress(address2) {
+    const server = createServer4();
+    const wss = new WebSocketServer2({
+      noServer: true,
+      maxPayload: MAX_DIRECT_FRAME_BYTES,
+      perMessageDeflate: false,
+      clientTracking: false
+    });
+    server.on("upgrade", (request, socket, head) => {
+      const path = request.url?.split("?")[0];
+      if (path === void 0 || !path.endsWith(DIRECT_WS_PATH)) {
+        socket.destroy();
+        return;
+      }
+      try {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          if (this.closed || !this.canAccept()) {
+            try {
+              ws.close(1013, "DIRECT_BUSY");
+            } catch {
+            }
+            return;
+          }
+          const session2 = new DirectSession(this, ws);
+          this.sessions.add(session2);
+          session2.start();
+        });
+      } catch {
+        try {
+          socket.destroy();
+        } catch {
+        }
+      }
+    });
+    server.on("request", (_request, response) => {
+      response.writeHead(404, { "content-type": "text/plain", connection: "close" });
+      response.end("Not Found");
+    });
+    server.on("connection", (socket) => {
+      this.sockets.add(socket);
+      socket.once("close", () => this.sockets.delete(socket));
+    });
+    server.on("error", () => {
+      this.options.logger.warn("Direct listener socket error", { code: "DIRECT_SOCKET_ERROR" });
+    });
+    server.on("clientError", (_error, socket) => {
+      try {
+        socket.destroy();
+      } catch {
+      }
+    });
+    await new Promise((resolve6, reject) => {
+      const onError = (error62) => {
+        server.removeListener("listening", onListening);
+        reject(error62);
+      };
+      const onListening = () => {
+        server.removeListener("error", onError);
+        resolve6();
+      };
+      server.once("error", onError);
+      server.once("listening", onListening);
+      server.listen({ host: address2, port: this.options.port, exclusive: true });
+    });
+    this.servers.push(server);
+    this.wsServers.push(wss);
+  }
+};
+var DirectSession = class {
+  constructor(listener, ws) {
+    this.listener = listener;
+    this.ws = ws;
+  }
+  phase = "hello";
+  trusted;
+  noise;
+  channel;
+  connectionId;
+  inboundCounter = 0;
+  lastReceivedAt = Date.now();
+  helloTimer;
+  handshakeTimer;
+  heartbeatTimer;
+  idleTimer;
+  get id() {
+    return this.connectionId;
+  }
+  isPending() {
+    return this.phase === "hello" || this.phase === "handshake";
+  }
+  isReady() {
+    return this.phase === "ready";
+  }
+  start() {
+    this.ws.on("message", (data2, isBinary2) => this.onRawMessage(data2, isBinary2));
+    this.ws.on("close", () => this.destroy());
+    this.ws.on("error", () => this.destroy());
+    this.helloTimer = setTimeout(
+      () => this.closeWith("DIRECT_TIMEOUT", "The Direct hello did not arrive in time."),
+      DIRECT_HELLO_TIMEOUT_MS
+    );
+  }
+  startHeartbeat() {
+    this.heartbeatTimer = setInterval(() => this.sendFrame("direct.ping", {}), DIRECT_HEARTBEAT_INTERVAL_MS);
+    this.idleTimer = setInterval(() => this.checkIdle(), Math.max(1e3, Math.floor(DIRECT_HEARTBEAT_INTERVAL_MS / 2)));
+  }
+  shutdown() {
+    this.destroy();
+  }
+  onRawMessage(data2, isBinary2) {
+    if (this.phase === "closed" || isBinary2) {
+      if (this.phase !== "closed") this.closeWith("DIRECT_INVALID_FRAME", "Only text Direct frames are accepted.");
+      return;
+    }
+    this.lastReceivedAt = Date.now();
+    let frame;
+    try {
+      frame = decodeDirectFrame(rawDataToString(data2), MAX_DIRECT_FRAME_BYTES);
+    } catch {
+      this.closeWith("DIRECT_INVALID_FRAME", "The Direct frame is invalid.");
+      return;
+    }
+    switch (frame.type) {
+      case "direct.close":
+        this.terminate(typeof frame.payload === "object" && frame.payload !== null ? frame.payload.code : void 0);
+        return;
+      case "direct.ping":
+        this.sendFrame("direct.pong", frame.payload);
+        return;
+      case "direct.pong":
+        return;
+      default:
+        break;
+    }
+    if (this.phase === "hello") {
+      if (frame.type !== "direct.hello") {
+        this.closeWith("DIRECT_INVALID_FRAME", "Expected direct.hello.");
+        return;
+      }
+      this.onHello(frame.payload);
+      return;
+    }
+    if (this.phase === "handshake") {
+      if (frame.type !== "direct.handshake") {
+        this.closeWith("DIRECT_INVALID_FRAME", "Expected direct.handshake.");
+        return;
+      }
+      void this.onHandshake(frame.payload);
+      return;
+    }
+    if (frame.type !== "direct.data") {
+      this.closeWith("DIRECT_INVALID_FRAME", "Expected direct.data.");
+      return;
+    }
+    this.onData(frame.payload);
+  }
+  onHello(payload) {
+    const trust = this.listener.trustedPeer(payload.clientDeviceId);
+    if (trust === void 0) {
+      this.closeWith("DIRECT_TRUST_REQUIRED", "This Client is not trusted by the Host yet; authorize it through the Server first.");
+      return;
+    }
+    this.clearHelloTimer();
+    this.connectionId = payload.connectionId;
+    this.trusted = trust;
+    try {
+      this.noise = new NoiseIkSession({
+        role: "responder",
+        localPrivateKey: this.listener.identity.privateKey,
+        localPublicKey: this.listener.identity.publicKey,
+        remotePublicKey: trust.publicKey,
+        prologue: createNoisePrologue(payload.connectionId, this.listener.identity.deviceId, trust.deviceId)
+      });
+    } catch {
+      this.closeWith("DIRECT_HANDSHAKE_FAILED", "The Direct Noise handshake could not start.");
+      return;
+    }
+    this.phase = "handshake";
+    this.handshakeTimer = setTimeout(
+      () => this.closeWith("DIRECT_HANDSHAKE_FAILED", "The Direct Noise handshake timed out."),
+      DIRECT_HANDSHAKE_TIMEOUT_MS
+    );
+    this.sendFrame("direct.ready", {
+      connectionId: payload.connectionId,
+      hostDeviceId: this.listener.identity.deviceId,
+      hostName: this.listener.identity.name,
+      hostPlatform: HOST_PLATFORM,
+      protocol: DIRECT_PROTOCOL_VERSION,
+      capabilities: [DIRECT_CAPABILITY],
+      maxFrameBytes: MAX_DIRECT_FRAME_BYTES,
+      heartbeatIntervalMs: DIRECT_HEARTBEAT_INTERVAL_MS
+    });
+  }
+  async onHandshake(payload) {
+    const noise = this.noise;
+    const trusted = this.trusted;
+    const connectionId = this.connectionId;
+    if (noise === void 0 || trusted === void 0 || connectionId === void 0 || payload.connectionId !== connectionId || payload.step !== 1) {
+      this.closeWith("DIRECT_HANDSHAKE_FAILED", "Unexpected Direct Noise handshake message.");
+      return;
+    }
+    try {
+      noise.readHandshake(fromBase64Url2(payload.data));
+      const reply = noise.writeHandshake();
+      if (!noise.complete) throw new Error("Noise IK did not complete.");
+      const channel = new DirectNoiseChannel(this, noise, trusted, connectionId);
+      this.channel = channel;
+      await this.listener.acceptChannel(channel);
+      if (this.phase === "closed") return;
+      this.clearHandshakeTimer();
+      this.phase = "ready";
+      this.startHeartbeat();
+      this.sendFrame("direct.handshake", {
+        connectionId,
+        step: 2,
+        data: toBase64Url2(reply)
+      });
+      this.listener.logger.debug("Direct peer channel ready", {
+        connectionId: shortDirectId(connectionId),
+        peerDeviceId: shortDirectId(trusted.deviceId)
+      });
+    } catch {
+      this.closeWith("DIRECT_HANDSHAKE_FAILED", "The Direct Noise handshake failed.");
+    }
+  }
+  onData(payload) {
+    const channel = this.channel;
+    if (channel === void 0 || payload.connectionId !== this.connectionId) {
+      this.closeWith("DIRECT_INVALID_FRAME", "Unexpected Direct data frame.");
+      return;
+    }
+    try {
+      channel.receive(payload.counter, fromBase64Url2(payload.ciphertext));
+    } catch {
+      this.closeWith("DIRECT_SECURE_CHANNEL_FAILED", "The Direct secure channel rejected a data frame.");
+    }
+  }
+  sendCiphertext(ciphertext) {
+    const noise = this.noise;
+    const connectionId = this.connectionId;
+    if (noise === void 0 || connectionId === void 0 || this.phase !== "ready") throw new Error("The Direct channel is not ready.");
+    const counter = Number(noise.sendingCounter() - 1n);
+    if (!Number.isSafeInteger(counter) || counter < 0) throw new Error("The Direct transport counter overflowed.");
+    this.sendFrame("direct.data", {
+      connectionId,
+      counter,
+      ciphertext: toBase64Url2(ciphertext)
+    });
+  }
+  assertInboundCounter(counter, noise) {
+    const expected = Number(noise.receivingCounter());
+    if (!Number.isSafeInteger(counter) || counter !== expected || counter !== this.inboundCounter) {
+      throw new Error("The Direct data frame counter is duplicated or out of order.");
+    }
+    this.inboundCounter += 1;
+  }
+  checkIdle() {
+    if (this.phase === "closed") return;
+    if (Date.now() - this.lastReceivedAt > DIRECT_IDLE_TIMEOUT_MS) {
+      this.closeWith("DIRECT_IDLE_TIMEOUT", "The Direct connection stopped responding.", true);
+    }
+  }
+  closeWith(code, message, retryable = false) {
+    if (this.phase === "closed") return;
+    const finish = () => this.destroy(code);
+    if (this.phase === "ready") {
+      this.sendFrame("direct.close", { code }, finish);
+    } else {
+      this.sendFrame("direct.reject", { code, message, retryable }, finish);
+    }
+    const timer2 = setTimeout(finish, 500);
+    timer2.unref?.();
+    if (this.ws.readyState !== WebSocket4.OPEN) finish();
+  }
+  terminate(code) {
+    if (code !== void 0 && this.phase === "ready") {
+      this.sendFrame("direct.close", { code }, () => this.destroy(code));
+      return;
+    }
+    this.destroy();
+  }
+  destroy(closeReason) {
+    if (this.phase === "closed") return;
+    this.phase = "closed";
+    this.clearTimers();
+    const channel = this.channel;
+    this.channel = void 0;
+    void channel?.close().catch(() => void 0);
+    if (this.noise !== void 0) {
+      this.noise.destroy();
+      this.noise = void 0;
+    }
+    this.listener.sessionClosed(this);
+    const closedConnectionId = this.connectionId;
+    if (closedConnectionId !== void 0) this.listener.notifyCarrierClosed(closedConnectionId, "CONNECTION_FAILED");
+    try {
+      this.ws.close(closeReason === void 0 ? 1e3 : 1008, closeReason);
+    } catch {
+    }
+  }
+  sendFrame(type, payload, afterFlush) {
+    if (this.ws.readyState !== WebSocket4.OPEN) {
+      afterFlush?.();
+      return;
+    }
+    try {
+      this.ws.send(encodeDirectFrame(createDirectFrame(type, payload), MAX_DIRECT_FRAME_BYTES), () => afterFlush?.());
+    } catch {
+      afterFlush?.();
+    }
+  }
+  clearHelloTimer() {
+    if (this.helloTimer !== void 0) clearTimeout(this.helloTimer);
+    this.helloTimer = void 0;
+  }
+  clearHandshakeTimer() {
+    if (this.handshakeTimer !== void 0) clearTimeout(this.handshakeTimer);
+    this.handshakeTimer = void 0;
+  }
+  clearTimers() {
+    this.clearHelloTimer();
+    this.clearHandshakeTimer();
+    if (this.heartbeatTimer !== void 0) clearInterval(this.heartbeatTimer);
+    if (this.idleTimer !== void 0) clearInterval(this.idleTimer);
+    this.heartbeatTimer = void 0;
+    this.idleTimer = void 0;
+  }
+};
+var DirectNoiseChannel = class {
+  constructor(session2, noise, trusted, connectionId) {
+    this.session = session2;
+    this.noise = noise;
+    this.trusted = trusted;
+    this.security = {
+      protocol: "Noise_IK_25519_ChaChaPoly_SHA256",
+      connectionId,
+      membershipId: `direct:${trusted.deviceId}`
+    };
+    this.peerDeviceId = trusted.deviceId;
+    this.peerIdentityKey = trusted.publicKey;
+  }
+  security;
+  peerDeviceId;
+  peerIdentityKey;
+  mode = "Direct";
+  handlers = /* @__PURE__ */ new Set();
+  incoming = new SecureMessageCodec();
+  outgoing = new SecureMessageCodec();
+  sendTail = Promise.resolve();
+  closed = false;
+  send(message) {
+    const run = this.sendTail.then(() => this.sendNow(message));
+    this.sendTail = run.catch(() => void 0);
+    return run;
+  }
+  async sendNow(message) {
+    if (this.closed) throw new Error("The Direct channel is closed.");
+    const encoded = encodeMessage(message);
+    for (const plaintext of this.outgoing.encode(encoded)) {
+      this.session.sendCiphertext(this.noise.encrypt(plaintext));
+    }
+  }
+  onMessage(handler) {
+    this.handlers.add(handler);
+    return () => this.handlers.delete(handler);
+  }
+  receive(counter, ciphertext) {
+    if (this.closed) return;
+    this.session.assertInboundCounter(counter, this.noise);
+    const plaintext = this.incoming.decode(this.noise.decrypt(ciphertext));
+    if (plaintext === void 0) return;
+    const message = decodeMessage(plaintext);
+    for (const handler of this.handlers) handler(message);
+  }
+  async close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.handlers.clear();
+    this.incoming.reset();
+    this.outgoing.reset();
+    this.noise.destroy();
+    this.session.shutdown();
+  }
+};
+function rawDataToString(data2) {
+  if (typeof data2 === "string") return data2;
+  if (Buffer.isBuffer(data2)) return data2.toString("utf8");
+  if (Array.isArray(data2)) return Buffer.concat(data2).toString("utf8");
+  if (data2 instanceof ArrayBuffer) return Buffer.from(data2).toString("utf8");
+  return String(data2);
+}
+function formatEndpoint(address2, port) {
+  return `${address2.includes(":") ? `[${address2}]` : address2}:${port}`;
+}
+function shortDirectId(value) {
+  return value.length <= 12 ? value : `${value.slice(0, 8)}\u2026${value.slice(-4)}`;
+}
+
 // src/harness-remote-bridge.ts
 import { randomUUID as randomUUID17 } from "node:crypto";
 
 // src/remote-directory-browser.ts
-import { mkdir as mkdir4, readdir as readdir4, stat as stat7 } from "node:fs/promises";
+import { mkdir as mkdir5, readdir as readdir4, stat as stat7 } from "node:fs/promises";
 import { homedir as homedir7, platform as platform2 } from "node:os";
-import { basename as basename6, dirname as dirname5, isAbsolute as isAbsolute9, parse as parse3, resolve as resolve5 } from "node:path";
+import { basename as basename6, dirname as dirname6, isAbsolute as isAbsolute9, parse as parse3, resolve as resolve5 } from "node:path";
 var MAX_ENTRIES = 500;
 async function ensureHostWorkspaceDirectory(path) {
   if (typeof path !== "string" || path.trim() === "" || path.includes("\0") || !isAbsolute9(path) || resolve5(path) === parse3(path).root) {
     throw new RpcError("INVALID_MESSAGE", "Workspace path must be an absolute, non-root directory path.");
   }
-  await mkdir4(path, { recursive: true });
+  await mkdir5(path, { recursive: true });
 }
 async function listRemoteDirectory(path, signal) {
   signal?.throwIfAborted();
@@ -104545,7 +106305,7 @@ function crumbs(path) {
   let current = path;
   while (current !== root) {
     segments.unshift(basename6(current));
-    current = dirname5(current);
+    current = dirname6(current);
   }
   for (const segment of segments) {
     current = resolve5(current, segment);
@@ -105351,6 +107111,8 @@ var HostPluginRuntime = class {
   identity;
   serverApi;
   serverConnection;
+  directListener;
+  directError;
   harnessVersion;
   closed = false;
   codex;
@@ -105404,6 +107166,7 @@ var HostPluginRuntime = class {
       this.serverConnection = this.createServerConnection(this.identity);
       if (this.config.hostControl?.enabled !== false) this.serverConnection.start();
     }
+    if (this.config.direct.enabled && this.config.role !== "client") await this.startDirect();
   }
   currentIdentity() {
     if (this.identity === void 0) throw new Error("remote runtime has not started");
@@ -105426,8 +107189,63 @@ var HostPluginRuntime = class {
       ...authorization?.account === void 0 ? {} : { account: authorization.account },
       authorized: authorization !== void 0,
       accountRequired: error62 === "ACCOUNT_AUTH_REQUIRED" || error62 === "AUTH_REQUIRED" || error62 === "AUTH_INVALID" || error62 === "TOKEN_EXPIRED" || error62 === "DEVICE_REVOKED" || error62 === "DEVICE_OWNERSHIP_REQUIRED",
-      connectedClients: this.listConnectedClients()
+      connectedClients: this.listConnectedClients(),
+      direct: this.directStatus()
     };
+  }
+  directStatus() {
+    const status2 = this.directListener?.status();
+    if (status2 !== void 0) return status2;
+    return {
+      enabled: this.config.direct.enabled,
+      running: false,
+      port: this.config.direct.port,
+      endpoints: [],
+      bindAddresses: [],
+      activeConnections: 0,
+      pendingHandshakes: 0,
+      tailscale: { detected: false, source: "none" },
+      ...this.directError === void 0 ? {} : { error: this.directError }
+    };
+  }
+  /** Live toggle used by the Host settings control surface. */
+  async setDirect(enabled, port) {
+    if (this.closed) throw new Error("remote runtime is closed");
+    if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) {
+      throw new RpcError("INVALID_MESSAGE", "Enter a Direct port between 1024 and 65535.");
+    }
+    this.config.direct = { enabled, port };
+    await this.stopDirect();
+    this.directError = void 0;
+    if (enabled && this.config.role !== "client") await this.startDirect();
+  }
+  async startDirect() {
+    const identity3 = this.identity;
+    if (identity3 === void 0) throw new Error("remote runtime has not started");
+    const listener = new DirectHostListener({
+      identity: identity3,
+      identities: this.identities,
+      logger: this.logger,
+      port: this.config.direct.port,
+      accept: (channel) => this.acceptAuthenticatedPeer(channel),
+      closeConnection: (connectionId, code) => {
+        void this.connections.closeConnection(connectionId, code, { closedBy: "host", retryable: true });
+      }
+    });
+    this.directListener = listener;
+    try {
+      await listener.start();
+      const status2 = listener.status();
+      if (!status2.running && status2.error !== void 0) this.directError = status2.error;
+    } catch (error62) {
+      this.directError = error62 instanceof Error ? error62.message : "DIRECT_START_FAILED";
+      this.logger.warn("Direct listener failed to start", { code: "DIRECT_START_FAILED" });
+    }
+  }
+  async stopDirect() {
+    const listener = this.directListener;
+    this.directListener = void 0;
+    await listener?.stop().catch(() => void 0);
   }
   async hasStoredAuthorization() {
     return this.serverApi?.hasStoredAuthorization() ?? false;
@@ -105590,6 +107408,7 @@ var HostPluginRuntime = class {
     if (this.closed) return;
     this.closed = true;
     this.serverApi?.close();
+    await this.stopDirect();
     await this.serverConnection?.stop();
     await this.connections.close();
     await this.localCodexPeer?.closeAll();
@@ -105616,7 +107435,12 @@ var HostPluginRuntime = class {
       capabilities: this.hostCapabilities(),
       workspaceTypes: this.hostWorkspaceTypes(),
       codex: this.codex.status(),
-      acp: this.acp.status()
+      acp: this.acp.status(),
+      direct: {
+        enabled: this.config.direct.enabled,
+        running: this.directListener?.status().running ?? false,
+        endpointCount: this.directListener?.status().endpoints.length ?? 0
+      }
     };
   }
   createServerConnection(identity3) {
@@ -105947,7 +107771,7 @@ function installRemoteDiscoveryTools(ctx, resolve6) {
 // src/cli.ts
 import { stat as stat8 } from "node:fs/promises";
 import { hostname as hostname5 } from "node:os";
-import { join as join14 } from "node:path";
+import { join as join15 } from "node:path";
 var QR_POLL_INTERVAL_MS = 2e3;
 var TERMINAL_QR_MARGIN = 4;
 async function runCli(args = process.argv.slice(2), dependencies = {}) {
@@ -106038,7 +107862,7 @@ async function status(args, runtime) {
     `Server: ${serverUrl}`,
     "Host control: enabled (dsh-TUI default)"
   ];
-  if (!await exists3(join14(directory, "device.json"))) {
+  if (!await exists3(join15(directory, "device.json"))) {
     lines.push("Device: not initialized", "Authorization: logged out", "Credential: unavailable");
     write(runtime.stdout, `${lines.join("\n")}
 
@@ -106083,7 +107907,7 @@ async function logout(args, runtime) {
   const serverUrl = selectedServer();
   const root = new IdentityStore({ env: runtime.env }).directory;
   const directory = serverStorageDirectory(root, serverUrl, "host");
-  if (!await exists3(join14(directory, "device.json"))) {
+  if (!await exists3(join15(directory, "device.json"))) {
     await new ServerCredentialStore(directory).clear();
     write(runtime.stdout, "This Host is already logged out.\n");
     return 0;

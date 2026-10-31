@@ -11,7 +11,7 @@ export interface FileViewerClientServiceLike {
   registerContentProvider(provider: RemoteFileContentProvider): () => void
 }
 
-export type RemoteTransportPreference = 'lan' | 'p2p' | 'turn' | 'relay'
+export type RemoteTransportPreference = 'direct' | 'lan' | 'p2p' | 'turn' | 'relay'
 
 export interface RemoteStatus {
   mode: 'local' | 'remote'
@@ -26,7 +26,7 @@ export interface RemoteStatus {
   connected?: boolean
   recoveryGeneration?: number
   connectedTargetDeviceId?: string
-  transport?: 'LAN' | 'P2P' | 'TURN' | 'Relay' | 'Disconnected'
+  transport?: 'LAN' | 'P2P' | 'TURN' | 'Relay' | 'Direct' | 'Disconnected'
   preferredTransports?: RemoteTransportPreference[]
   connectionProgress?: {
     targetDeviceId: string
@@ -62,9 +62,51 @@ export interface RemoteStatus {
       deviceId: string
       name: string
       platform?: string
-      mode?: 'LAN' | 'P2P' | 'TURN' | 'Relay'
+      mode?: 'LAN' | 'P2P' | 'TURN' | 'Relay' | 'Direct'
     }>
+    direct?: DirectHostStatus
   }
+}
+
+/** Live Direct (Tailscale) listener state pushed by `status`/`settings.get`. */
+export interface DirectHostStatus {
+  enabled: boolean
+  running: boolean
+  port: number
+  endpoints: string[]
+  bindAddresses?: string[]
+  activeConnections?: number
+  pendingHandshakes?: number
+  tailscale: {
+    detected: boolean
+    source?: 'cli' | 'interfaces' | 'none'
+    backendState?: string
+    hostName?: string
+    dnsName?: string
+    error?: string
+  }
+  error?: string
+}
+
+/** A saved Direct (Tailscale) Host address for an already-authorized Host. */
+export interface DirectHostView {
+  hostDeviceId: string
+  hostName: string
+  platform?: string
+  endpoint: string
+  addedAt: number
+  lastConnectedAt?: number
+}
+
+export interface DirectHostCandidate {
+  hostDeviceId: string
+  name: string
+  platform?: string
+}
+
+export interface DirectHostsView {
+  hosts: DirectHostView[]
+  candidates: DirectHostCandidate[]
 }
 
 interface RemoteNetworkDetails {
@@ -75,6 +117,8 @@ interface RemoteNetworkDetails {
   preferredTransports: RemoteTransportPreference[]
   local: { deviceId: string; name: string; platform: string }
   remote: { deviceId: string; name: string; platform: string }
+  heartbeatIntervalMs?: number
+  lastReceivedAt?: number
   webRtc?: {
     mode?: 'LAN' | 'P2P' | 'TURN'
     connectionState: string
@@ -187,6 +231,7 @@ interface PluginSettings {
   terminal?: { enabled?: boolean }
   hostControl?: { enabled?: boolean }
   loopback?: { ports?: number[] }
+  direct?: { enabled?: boolean; port?: number }
   remoteTools?: { enabled?: boolean }
   forceRelay?: boolean
   logLevel?: 'debug' | 'info' | 'warn' | 'error'
@@ -215,6 +260,7 @@ export interface PluginSettingsView {
   association?: PluginAssociation
   associations?: Partial<Record<'host' | 'client', PluginAssociation>>
   acpAvailability?: Record<string, boolean>
+  direct?: DirectHostStatus
 }
 
 export interface PluginAssociation {

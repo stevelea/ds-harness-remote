@@ -2065,3 +2065,94 @@ Plugin configuration continues through the existing official `settings` endpoint
 Remote access namespaces remain local-only. Installation, removal, arbitrary
 plugin-manager methods and legacy ApiProxy plugin management remain disallowed.
 This adds no new wire format or capability and requires an updated Host plugin.
+
+
+## 28. Direct（Tailscale）传输 v1
+
+本节定义可选的、无 Server 的 Host/Client 数据面。它复用既有 Noise IK 与业务通道，不改变
+Server Control 协议；Server 永不接收 Direct frame，也不参与 Direct 连接。
+
+### 28.1 适用条件
+
+- Host 显式开启 Direct（`direct.enabled`），并且本机检测到至少一个 Tailscale 地址；
+  listener 只绑定检测到的 tailnet 地址（`100.64.0.0/10`、`fd7a:115c:a1e0::/48`），
+  绝不绑定通配、公网、RFC1918 或 link-local 地址。
+- Client 已经通过既有 Server 流程与 Host 互相固定身份密钥（Host 本地 trusted peer、
+  Client 本地 pinned Host key）。Direct 不提供首次配对或账号授权。
+- 连接不经过 Server，不使用 device token、账号凭据或服务器鉴权。
+
+### 28.2 传输与帧
+
+单条 WebSocket 连接到 `ws://<endpoint>/direct/v1`，仅允许 text frame；Server 端不存在该
+endpoint 的语义。Direct frame 独立于 Control frame，有自己的版本号：
+
+```json
+{ "v": 1, "id": "<opaque>", "type": "direct.hello", "timestamp": 0, "payload": { } }
+```
+
+| type | 方向 | payload | 说明 |
+| --- | --- | --- | --- |
+| `direct.hello` | Client → Host | `connectionId`、`clientDeviceId`、`clientVersion?`、`capabilities` | 首帧；`connectionId` 必须为 UUID/ULID，绑定 Noise prologue |
+| `direct.ready` | Host → Client | `connectionId`、`hostDeviceId`、`hostName`、`hostPlatform?`、`protocol`、`capabilities`、`maxFrameBytes`、`heartbeatIntervalMs` | 仅对本地 trusted 的 clientDeviceId 发送 |
+| `direct.reject` | Host → Client | `code`、`message`、`retryable?` | 握手完成前拒绝 |
+| `direct.handshake` | 双向 | `connectionId`、`step`（1 或 2）、`data`（Base64URL） | Noise IK：Client 发 step 1，Host 回 step 2 |
+| `direct.data` | 双向 | `connectionId`、`counter`、`ciphertext`（Base64URL） | Noise 密文；每方向 counter 从 0 递增 |
+| `direct.ping` / `direct.pong` | 双向 | `nonce?` | 保活 |
+| `direct.close` | 双向 | `code`、`message?` | 关闭已认证连接 |
+
+`capabilities` 必须包含 `transport.direct.v1`，entries 去重且最多 128 项。Base64URL 必须是
+无 padding 的 canonical 形式。未知 type、未知字段、错误阶段帧、非 text frame、重复 JSON 字段
+和超限 frame 必须 fail closed。`maxFrameBytes` 最小 1、最大 1 MiB；`direct.data.ciphertext`
+解码后不得超过 Noise 单消息上限（65,535 bytes）。
+
+### 28.3 连接顺序与不变量
+
+1. Client 在本地生成 `connectionId`，打开 WebSocket 并发送 `direct.hello`。
+2. Host 只按 `clientDeviceId` 查本地 trusted peer；不存在则 `direct.reject`
+   （`DIRECT_TRUST_REQUIRED`）并关闭，**不得**继续 Noise，也不得向 Client 暴露 Host 的
+   身份密钥。
+3. Host 回复 `direct.ready`，Client 校验 `connectionId`、`hostDeviceId`、
+   `protocol`、`transport.direct.v1` 与 limits；不匹配立即失败。
+4. 双方使用与 Relay 完全相同的 suite
+   `Noise_IK_25519_ChaChaPoly_SHA256` 和 `createNoisePrologue(connectionId, hostDeviceId,
+   clientDeviceId)`。Client 是 initiator，Host 是 responder。Client 以本地 pinned Host key
+   作为 remote static；Host 以 trusted peer 的 key 作为 remote static。
+5. Noise IK 完成后 Host 才把 channel 交给 `ConnectionController`；Client 收到 step 2 后才开始
+   业务 RPC。`direct.handshake`、`direct.hello`、`direct.ready` 本身不携带任何明文业务数据。
+6. Host 侧 channel 的安全上下文为 `{ protocol, connectionId,
+   membershipId: "direct:<clientDeviceId>" }`，peer 身份来自本地 trusted peer，`mode` 为
+   `Direct`。该 `membershipId` 只用于本地日志/连接隔离，不表示 Server membership。
+7. `direct.data.counter` 必须逐帧等于该方向 Noise sending nonce，且收方向从 0 开始；
+   重复、跳号、回退或超限必须关闭连接。分片和重组仍由既有 `SecureMessageCodec` 在 Noise
+   之下完成。
+8. 任一方向连续 75 s 未收到任何 Direct frame 必须关闭；心跳为 25 s。关闭前可发送
+   `direct.close`，但关闭原因不得包含 prompt、密钥、token 或业务内容。
+
+### 28.4 默认限制
+
+| 项 | 默认限制 |
+| --- | --- |
+| Direct JSON frame | 1 MiB |
+| hello 超时 | 5 s |
+| Noise IK 超时 | 15 s |
+| 心跳 | 25 s |
+| idle 关闭 | 75 s |
+| 同时已认证 Direct 连接 | 16 |
+| 同时握手中的 socket | 8 |
+| listener 绑定地址 | 仅本机检测到的 tailnet 地址 |
+
+### 28.5 失败语义
+
+- 未 trusted 的 Client、Noise 失败、密钥不匹配、counter 违规、非法 frame 一律 fail closed，
+  不得降级为明文或 Server Relay。
+- Direct 失败不改变既有 Server 连接状态；同一个 Host 仍可同时通过 Server 接受 Relay/WebRTC
+  连接，二者在 `ConnectionController` 中按 connectionId 隔离。
+- Client 显示模式为 `Direct`。这是 client-local 显示值，不进入 Server 的
+  `transport.selected`（Server 侧仍只有 `lan | p2p | turn | relay`）。
+
+### 28.6 兼容性
+
+Direct 是独立扩展：`transport.direct.v1` 不参与 Server hello/connect 协商，旧 Host、旧 Client
+和 Server 不会看到任何 Direct frame。Host 未开启 Direct 或未检测到 Tailscale 时，Client 只能
+继续使用既有 LAN/P2P/TURN/Relay 路径。Direct 不改变排他策略、允许列表、权限单次审批、
+终端归属、文件查看、Codex/ACP 数据面或任何业务 RPC 的语义。

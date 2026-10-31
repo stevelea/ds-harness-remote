@@ -4,12 +4,15 @@ import type { OAuthProviderInfo } from '../server-api.js'
 import type { StatusFeed } from '../status-stream.js'
 import { deepSeekWorkspaceIcon, gptWorkspaceIcon } from './icons.js'
 import { pendingWorkspaceSelectionKey } from './navigation.js'
-import { connectedClientModeLabel, connectedProgress, connectionErrorMessage, formatPlatform, messageOf } from './presentation.js'
+import { connectedClientModeLabel, connectedProgress, connectionErrorMessage, formatLocalTime, formatPlatform, messageOf } from './presentation.js'
 import { createRemoteProgressView, runConnectHostProgress } from './progress.js'
 import type {
   ClientReact,
   CodexWorkspaceView,
   CursorWorkspaceView,
+  DirectHostCandidate,
+  DirectHostView,
+  DirectHostsView,
   LoginMethod,
   OAuthProvider,
   OAuthQrPollResult,
@@ -18,6 +21,7 @@ import type {
   RemoteDevice,
   RemoteDirectoryListing,
   RemoteStatus,
+  RemoteTransportPreference,
   RemoteWorkspaceView,
   PluginSettingsView,
 } from './types.js'
@@ -37,13 +41,21 @@ export function createRemoteWorkspaceAction(React: ClientReact) {
     const connectionErrorMessageFor = (reason: unknown, translate: Translate): string => {
       if (typeof reason === 'object' && reason !== null && 'code' in reason) {
         const code = (reason as { code?: unknown }).code
-        if (typeof code === 'string') return connectionErrorMessage(code, translate)
+        // Direct control errors carry precise, already-localized-by-domain
+        // messages (unknown/unpinned host, bad address); do not flatten them
+        // into the generic Server-connection copy.
+        if (typeof code === 'string' && !code.startsWith('DIRECT_')) return connectionErrorMessage(code, translate)
       }
       return messageOf(reason)
     }
     const [open, setOpen] = React.useState(false)
     const [status, setStatus] = React.useState<RemoteStatus | undefined>(undefined)
     const [devices, setDevices] = React.useState<RemoteDevice[]>([])
+    const [directHosts, setDirectHosts] = React.useState<DirectHostView[]>([])
+    const [directCandidates, setDirectCandidates] = React.useState<DirectHostCandidate[]>([])
+    const [directAddOpen, setDirectAddOpen] = React.useState(false)
+    const [directAddHostId, setDirectAddHostId] = React.useState('')
+    const [directAddEndpoint, setDirectAddEndpoint] = React.useState('')
     const [selectedHost, setSelectedHost] = React.useState<RemoteDevice | undefined>(undefined)
     // The Host being connected right now: its row stays visible as a collapsed
     // summary so the progress panel below it is on screen without scrolling.
@@ -119,6 +131,7 @@ export function createRemoteWorkspaceAction(React: ClientReact) {
     React.useEffect(() => {
       if (!open) {
         setDevicesOpen(false)
+        setDirectAddOpen(false)
         qrFlowRun.current += 1
         setBusy(false)
       }
@@ -321,7 +334,11 @@ export function createRemoteWorkspaceAction(React: ClientReact) {
       onClick: () => selectLoginMethod(`oauth:${provider.id}`),
     }, t('providerLogin', { provider: provider.displayName }))
 
-    const selectHost = async (host: RemoteDevice): Promise<void> => {
+    const loadHostWorkspaces = async (
+      host: RemoteDevice,
+      connectAction: () => Promise<void>,
+      preferredTransports?: RemoteTransportPreference[],
+    ): Promise<void> => {
       setBusy(true)
       setError(undefined)
       setConnectingHost(host)
@@ -340,13 +357,14 @@ export function createRemoteWorkspaceAction(React: ClientReact) {
       setShowAllClaudeWorkspaces(false)
       try {
         const result = await runConnectHostProgress(
-          status?.preferredTransports,
+          preferredTransports ?? status?.preferredTransports,
           host.deviceId,
           props.control,
           { label: 'remoteProgressLoadingWorkspaces', detail: 'remoteProgressLoadingWorkspacesDetail' },
           setProgress,
           progressRun,
           async () => {
+            await connectAction()
             // The first request establishes the selected Host connection.
             // Keep optional probes on that same connection instead of racing
             // multiple initial handshakes for one target.
@@ -405,6 +423,70 @@ export function createRemoteWorkspaceAction(React: ClientReact) {
         // A failed attempt expands the full Host list again; a successful one
         // is represented by `selectedHost`.
         setConnectingHost(undefined)
+        setBusy(false)
+      }
+    }
+
+    const selectHost = (host: RemoteDevice): Promise<void> => loadHostWorkspaces(host, async () => undefined)
+
+    const directDevice = (entry: DirectHostView): RemoteDevice => ({
+      deviceId: entry.hostDeviceId,
+      name: entry.hostName,
+      platform: entry.platform ?? 'tailscale',
+      online: true,
+    })
+
+    const connectDirectHost = async (entry: DirectHostView): Promise<void> => {
+      await loadHostWorkspaces(directDevice(entry), async () => {
+        await props.control('direct.connect', { hostDeviceId: entry.hostDeviceId, endpoint: entry.endpoint })
+      }, ['direct'])
+    }
+
+    const refreshDirectHosts = async (): Promise<void> => {
+      try {
+        const view = await props.control<DirectHostsView>('direct.hosts.list')
+        setDirectHosts(view.hosts)
+        setDirectCandidates(view.candidates)
+      } catch {
+        // Hosts without the Direct control endpoints simply keep no saved rows.
+      }
+    }
+
+    const addDirectHost = async (): Promise<void> => {
+      const hostDeviceId = directAddHostId
+      const endpoint = directAddEndpoint.trim()
+      if (hostDeviceId === '') { setError(t('remoteDirectHostRequired')); return }
+      if (endpoint === '') { setError(t('remoteDirectEndpointRequired')); return }
+      setBusy(true)
+      setError(undefined)
+      setNotice(undefined)
+      try {
+        const view = await props.control<DirectHostsView>('direct.host.add', { hostDeviceId, endpoint })
+        setDirectHosts(view.hosts)
+        setDirectCandidates(view.candidates)
+        setDirectAddOpen(false)
+        setDirectAddHostId('')
+        setDirectAddEndpoint('')
+        setNotice(t('remoteDirectSaved'))
+      } catch (reason) {
+        setError(messageOf(reason))
+      } finally {
+        setBusy(false)
+      }
+    }
+
+    const removeDirectHost = async (hostDeviceId: string): Promise<void> => {
+      setBusy(true)
+      setError(undefined)
+      setNotice(undefined)
+      try {
+        const view = await props.control<DirectHostsView>('direct.host.remove', { hostDeviceId })
+        setDirectHosts(view.hosts)
+        setDirectCandidates(view.candidates)
+        setNotice(t('remoteDirectRemoved'))
+      } catch (reason) {
+        setError(messageOf(reason))
+      } finally {
         setBusy(false)
       }
     }
@@ -617,6 +699,7 @@ export function createRemoteWorkspaceAction(React: ClientReact) {
       setShowAllOpencodeWorkspaces(false)
       setShowAllClaudeWorkspaces(false)
       setOpen(true)
+      void refreshDirectHosts()
       await refreshRemote()
     }
 
@@ -944,6 +1027,77 @@ export function createRemoteWorkspaceAction(React: ClientReact) {
     // While a Host is connecting only that row stays listed, so the progress
     // panel below the list is visible without scrolling past every device.
     const listedHosts = connectingHost === undefined ? devices : [connectingHost]
+    const directAddCandidates = directCandidates.filter(candidate =>
+      !directHosts.some(entry => entry.hostDeviceId === candidate.hostDeviceId))
+    const directSection = directHosts.length === 0 && directAddCandidates.length === 0 && !directAddOpen
+      ? null
+      : React.createElement('section', {
+        className: 'dshRemoteDirectHosts',
+        'aria-label': t('remoteDirectHosts'),
+      },
+        React.createElement('div', { className: 'dshRemoteWorkspaceSourceHeading' },
+          React.createElement('span', { className: 'dshRemoteWorkspaceSourceText' },
+            React.createElement('strong', null, t('remoteDirectHosts'))),
+          React.createElement('button', {
+            type: 'button',
+            className: 'dshRemoteAddWorkspace',
+            disabled: busy,
+            title: t('remoteDirectAdd'),
+            'aria-label': t('remoteDirectAdd'),
+            onClick: () => { setDirectAddOpen(current => !current); setError(undefined) },
+          }, React.createElement('svg', {
+            className: 'dshRemoteAddWorkspaceIcon', viewBox: '0 0 16 16', 'aria-hidden': true, focusable: false,
+          }, React.createElement('path', { d: 'M8 3v10M3 8h10', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round' })))),
+        React.createElement('p', { className: 'dshRemoteHint' }, t('remoteDirectHint')),
+        directHosts.length === 0
+          ? React.createElement('p', { className: 'dshRemoteHint' }, t('remoteDirectEmpty'))
+          : directHosts.map(entry => React.createElement('div', {
+            key: entry.hostDeviceId,
+            className: 'dshRemoteDirectHostRow',
+          },
+            React.createElement('div', null,
+              React.createElement('strong', null, entry.hostName),
+              React.createElement('code', null, entry.endpoint),
+              entry.lastConnectedAt === undefined
+                ? null
+                : React.createElement('small', null, t('lastActive', { time: formatLocalTime(entry.lastConnectedAt) }))),
+            React.createElement('div', { className: 'dshRemoteDirectHostActions' },
+              React.createElement('button', {
+                type: 'button', disabled: busy,
+                onClick: () => void connectDirectHost(entry),
+              }, t('remoteDirectConnect')),
+              React.createElement('button', {
+                type: 'button', disabled: busy,
+                onClick: () => void removeDirectHost(entry.hostDeviceId),
+              }, t('remoteDirectRemove'))))),
+        !directAddOpen ? null : React.createElement('div', { className: 'dshRemoteDirectAdd' },
+          directAddCandidates.length === 0
+            ? React.createElement('p', { className: 'dshRemoteHint' }, t('remoteDirectNoCandidates'))
+            : React.createElement('select', {
+              value: directAddHostId,
+              disabled: busy,
+              'aria-label': t('remoteDirectChooseHost'),
+              onChange: (event: Event) => setDirectAddHostId((event.target as HTMLSelectElement).value),
+            },
+              React.createElement('option', { value: '' }, t('remoteDirectChooseHost')),
+              directAddCandidates.map(candidate => React.createElement('option', {
+                key: candidate.hostDeviceId,
+                value: candidate.hostDeviceId,
+              }, candidate.platform === undefined
+                ? candidate.name
+                : `${candidate.name} · ${formatPlatform(candidate.platform)}`))),
+          React.createElement('input', {
+            value: directAddEndpoint,
+            disabled: busy,
+            placeholder: t('remoteDirectEndpointPlaceholder'),
+            'aria-label': t('remoteDirectEndpoint'),
+            onChange: (event: Event) => setDirectAddEndpoint((event.target as HTMLInputElement).value),
+          }),
+          React.createElement('button', {
+            type: 'button',
+            disabled: busy || directAddHostId === '' || directAddEndpoint.trim() === '',
+            onClick: () => void addDirectHost(),
+          }, t('remoteDirectAddSave'))))
 
     return React.createElement(React.Fragment, null,
       React.createElement('div', { className: `dshRemoteSidebarEntry${status?.mode === 'remote' ? ' isActive' : ''}${props.wide ? ' isWide' : ' isRail'}` },
@@ -1171,6 +1325,7 @@ export function createRemoteWorkspaceAction(React: ClientReact) {
                       device.clientVersion === undefined ? undefined : t('pluginVersion', { version: device.clientVersion }),
                     ].filter(Boolean).join(' · '))),
                     React.createElement('small', null, t(device.online ? 'online' : 'offline')))))) : null,
+              directSection,
               React.createElement(RemoteProgressView, { progress, t }),
               selectedHost === undefined
                 ? (connectingHost === undefined ? React.createElement(React.Fragment, null,

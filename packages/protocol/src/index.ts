@@ -556,7 +556,12 @@ export interface DeviceDescriptor {
 }
 
 export interface TransportStats {
-  mode: 'LAN' | 'P2P' | 'TURN' | 'Relay' | 'Disconnected'
+  /**
+   * `Direct` is a client-local designation for the serverless Tailscale
+   * transport. It never travels on the Server control plane: Server transport
+   * negotiation stays `LAN | P2P | TURN | Relay`.
+   */
+  mode: 'LAN' | 'P2P' | 'TURN' | 'Relay' | 'Direct' | 'Disconnected'
   connected: boolean
   rttMs?: number
   bytesSent?: number
@@ -1284,6 +1289,212 @@ export function decodeRelayDataFrame(
     return relayDataFrameSchema.parse(parseWireJson(data))
   } catch {
     throw new Error('Invalid Relay data frame.')
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Direct (Tailscale) transport v1 — serverless Host/Client data plane.
+//
+// The Host binds a WebSocket listener only to detected Tailscale addresses and
+// the Client connects to `ws://<tailnet-address>:<port>/direct/v1`. There is no
+// Server in this path: both peers authenticate each other with the identity
+// keys pinned by the normal Server authorization, and all Harness traffic still
+// runs inside a Noise IK channel. See docs/protocol.md §25 and
+// docs/design/direct-tailscale.md.
+// ────────────────────────────────────────────────────────────────────────────
+
+export const DIRECT_PROTOCOL_VERSION = 1
+export const DIRECT_WS_PATH = '/direct/v1'
+export const DIRECT_CAPABILITY = 'transport.direct.v1'
+export const MAX_DIRECT_FRAME_BYTES = 1024 * 1024
+/** A Client must send `direct.hello` within this window after the socket opens. */
+export const DIRECT_HELLO_TIMEOUT_MS = 5_000
+/** Noise IK must finish within this window after `direct.ready`. */
+export const DIRECT_HANDSHAKE_TIMEOUT_MS = 15_000
+export const DIRECT_HEARTBEAT_INTERVAL_MS = 25_000
+/** Close the socket when no frame arrives within this window. */
+export const DIRECT_IDLE_TIMEOUT_MS = 75_000
+export const MAX_DIRECT_ACTIVE_CONNECTIONS = 16
+export const MAX_DIRECT_PENDING_HANDSHAKES = 8
+export const MAX_DIRECT_HOST_NAME_LENGTH = 80
+export const MAX_DIRECT_CLIENT_VERSION_LENGTH = 64
+export const MAX_DIRECT_CLOSE_CODE_LENGTH = 64
+export const MAX_DIRECT_CLOSE_MESSAGE_LENGTH = 512
+
+export const directFrameTypes = [
+  'direct.hello',
+  'direct.ready',
+  'direct.reject',
+  'direct.handshake',
+  'direct.data',
+  'direct.ping',
+  'direct.pong',
+  'direct.close',
+] as const
+
+export type DirectFrameType = typeof directFrameTypes[number]
+
+export interface DirectFrame<TPayload = unknown> {
+  v: typeof DIRECT_PROTOCOL_VERSION
+  id: string
+  type: DirectFrameType
+  timestamp: number
+  payload: TPayload
+}
+
+/** First Client frame. `connectionId` binds the Noise prologue for this socket. */
+export interface DirectHelloPayload {
+  connectionId: string
+  clientDeviceId: string
+  clientVersion?: string
+  capabilities: string[]
+}
+
+/** Host acceptance frame; only sent for a client id the Host trusts locally. */
+export interface DirectReadyPayload {
+  connectionId: string
+  hostDeviceId: string
+  hostName: string
+  hostPlatform?: string
+  protocol: typeof DIRECT_PROTOCOL_VERSION
+  capabilities: string[]
+  maxFrameBytes: number
+  heartbeatIntervalMs: number
+}
+
+export interface DirectRejectPayload {
+  code: string
+  message: string
+  retryable?: boolean
+}
+
+/** Noise IK step frame: the initiator sends step 1, the responder replies step 2. */
+export interface DirectHandshakePayload {
+  connectionId: string
+  step: 1 | 2
+  data: string
+}
+
+/** Encrypted transport message; counters are per direction, starting at 0. */
+export interface DirectDataPayload {
+  connectionId: string
+  counter: number
+  ciphertext: string
+}
+
+export interface DirectPingPayload {
+  nonce?: string
+}
+
+export interface DirectClosePayload {
+  code: string
+  message?: string
+}
+
+const directConnectionIdSchema = deviceIdSchema
+const directCapabilityListSchema = z.array(z.unknown()).max(MAX_CAPABILITY_ENTRIES).pipe(
+  z.array(z.string().min(1)).refine(uniqueStrings),
+)
+const directCiphertextSchema = canonicalBase64UrlSchema.max(Math.ceil(MAX_DIRECT_FRAME_BYTES / 3) * 4)
+
+export const directHelloPayloadSchema: z.ZodType<DirectHelloPayload> = z.object({
+  connectionId: directConnectionIdSchema,
+  clientDeviceId: deviceIdSchema,
+  clientVersion: boundedUtf8Schema(1, MAX_DIRECT_CLIENT_VERSION_LENGTH).optional(),
+  capabilities: directCapabilityListSchema,
+}).strict()
+
+export const directReadyPayloadSchema: z.ZodType<DirectReadyPayload> = z.object({
+  connectionId: directConnectionIdSchema,
+  hostDeviceId: deviceIdSchema,
+  hostName: boundedUtf8Schema(1, MAX_DIRECT_HOST_NAME_LENGTH).refine(value => value.trim().length > 0),
+  hostPlatform: devicePlatformSchema.optional(),
+  protocol: z.literal(DIRECT_PROTOCOL_VERSION),
+  capabilities: directCapabilityListSchema,
+  maxFrameBytes: z.number().int().positive().max(MAX_DIRECT_FRAME_BYTES),
+  heartbeatIntervalMs: z.number().int().positive().max(DIRECT_IDLE_TIMEOUT_MS),
+}).strict()
+
+export const directRejectPayloadSchema: z.ZodType<DirectRejectPayload> = z.object({
+  code: boundedUtf8Schema(1, MAX_DIRECT_CLOSE_CODE_LENGTH),
+  message: boundedUtf8Schema(1, MAX_DIRECT_CLOSE_MESSAGE_LENGTH),
+  retryable: z.boolean().optional(),
+}).strict()
+
+export const directHandshakePayloadSchema: z.ZodType<DirectHandshakePayload> = z.object({
+  connectionId: directConnectionIdSchema,
+  step: z.union([z.literal(1), z.literal(2)]),
+  data: directCiphertextSchema,
+}).strict()
+
+export const directDataPayloadSchema: z.ZodType<DirectDataPayload> = z.object({
+  connectionId: directConnectionIdSchema,
+  counter: z.number().int().nonnegative().safe(),
+  ciphertext: directCiphertextSchema,
+}).strict()
+
+export const directPingPayloadSchema: z.ZodType<DirectPingPayload> = z.object({
+  nonce: boundedUtf8Schema(1, 64).optional(),
+}).strict()
+
+export const directClosePayloadSchema: z.ZodType<DirectClosePayload> = z.object({
+  code: boundedUtf8Schema(1, MAX_DIRECT_CLOSE_CODE_LENGTH),
+  message: boundedUtf8Schema(1, MAX_DIRECT_CLOSE_MESSAGE_LENGTH).optional(),
+}).strict()
+
+export const directFrameSchema = z.object({
+  v: z.literal(DIRECT_PROTOCOL_VERSION),
+  id: z.string().min(1),
+  type: z.enum(directFrameTypes),
+  timestamp: z.number().int().positive().safe(),
+  payload: z.unknown(),
+}).strict() as unknown as z.ZodType<DirectFrame>
+
+const directFramePayloadSchemas: Record<DirectFrameType, z.ZodType> = {
+  'direct.hello': directHelloPayloadSchema,
+  'direct.ready': directReadyPayloadSchema,
+  'direct.reject': directRejectPayloadSchema,
+  'direct.handshake': directHandshakePayloadSchema,
+  'direct.data': directDataPayloadSchema,
+  'direct.ping': directPingPayloadSchema,
+  'direct.pong': directPingPayloadSchema,
+  'direct.close': directClosePayloadSchema,
+}
+
+export function createDirectFrame<TPayload>(
+  type: DirectFrameType,
+  payload: TPayload,
+  id = cryptoRandomId(),
+): DirectFrame<TPayload> {
+  return {
+    v: DIRECT_PROTOCOL_VERSION,
+    id,
+    type,
+    timestamp: Date.now(),
+    payload,
+  }
+}
+
+export function parseDirectFrame(input: unknown): DirectFrame {
+  const frame = directFrameSchema.parse(input)
+  return { ...frame, payload: directFramePayloadSchemas[frame.type].parse(frame.payload) }
+}
+
+export function encodeDirectFrame(frame: DirectFrame, maxFrameBytes = MAX_DIRECT_FRAME_BYTES): string {
+  const parsed = parseDirectFrame(frame)
+  const encoded = JSON.stringify(parsed)
+  const bytes = new TextEncoder().encode(encoded).byteLength
+  if (bytes > maxFrameBytes) throw new Error('Direct frame exceeds the Direct transport limit.')
+  return encoded
+}
+
+export function decodeDirectFrame(data: string | Uint8Array, maxFrameBytes = MAX_DIRECT_FRAME_BYTES): DirectFrame {
+  const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data
+  if (bytes.byteLength > maxFrameBytes) throw new Error('Direct frame exceeds the Direct transport limit.')
+  try {
+    return parseDirectFrame(parseWireJson(data))
+  } catch {
+    throw new Error('Invalid Direct transport frame.')
   }
 }
 

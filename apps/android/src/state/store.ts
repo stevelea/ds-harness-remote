@@ -48,6 +48,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   bootPhase: 'loading',
   devices: [],
   connection: disconnected,
+  connectionMode: 'server',
+  directEndpoint: undefined,
   connectionProbeOrder: [],
   codexAvailable: false,
   cursorAvailable: false,

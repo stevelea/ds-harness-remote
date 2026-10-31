@@ -20,6 +20,9 @@ export type ConnectionStage =
 
 export type ConnectionProbeTransport = 'lan' | 'p2p' | 'turn' | 'relay'
 
+/** Server relay/WebRTC session vs. the serverless Direct (Tailscale) path. */
+export type ConnectionMode = 'server' | 'direct'
+
 export type LoginMethod = 'oauth' | 'github-oauth' | 'google-oauth' | 'password'
 
 export type RedirectLoginMethod = Exclude<LoginMethod, 'password'>
@@ -70,6 +73,14 @@ export interface DevicePresence {
   deviceId: string
   online: boolean
   lastSeenAt?: number
+}
+
+/** A Direct (Tailscale) address saved for one already-trusted Host device. */
+export interface SavedDirectEndpoint {
+  deviceId: string
+  /** Normalized host:port, or wss://host:port; the WebSocket path is added at connect time. */
+  endpoint: string
+  updatedAt: number
 }
 
 export interface HostDescriptor {

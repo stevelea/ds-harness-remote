@@ -53,6 +53,7 @@ DS Harness Remote 只是通往这个工作环境的另一个窗口。
 - 可将纯终端 [dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI) profile 作为 Host
 - Harness 主机无需开放公网监听端口，无需公网IP，可以从任意可上网的地方，通过双向端到端加密链路安全连接。
 - 优先使用P2P网络，全球多TURN节点中转，极端情况下使用Server Relay确保可用。
+- 可选 Tailscale Direct 模式：Host 与 Client 在同一 tailnet 时，Client 可以不经过 Remote Server 直连 Host。Host 仍不监听公网地址，只绑定检测到的 Tailscale 地址。
 - 通过 Harness 原生侧栏提供工作区文件、只读预览、远程终端和已授权本机开发服务预览。
 - CodeX / ACP 终端使用 Host 默认 shell，在会话目录启动，并在重连时恢复终端屏幕。
 - Android 按对话保留草稿与阅读位置，提供后端分类搜索和本机收藏；对话正文从已连接的 Host 加载。
@@ -256,7 +257,7 @@ Harness 业务流量在 Client 加密，只能由选定的 Host 解密，固定�
 
 ## 网络与传输
 
-Host 只建立出站连接，不监听公网端口，也不要求路由器端口转发。
+Host 只建立出站连接，不监听公网端口，也不要求路由器端口转发。唯一例外是可选、默认关闭的 Direct（Tailscale）listener，只绑定本机检测到的 tailnet 地址。
 
 Remote 按 `LAN -> P2P -> TURN -> Relay` 协商路径；
 
@@ -265,7 +266,15 @@ WebRTC 不可用或连接失败时，会降级到加密的 WebSocket Relay。
 
 所有路径都承载同一份 Noise 密文，并保持相同的 Host/Client 身份边界。
 
-网络拓扑、控制面与数据面、NAT、降级、重连语义和当前验证状态详见[网络与传输](docs/network.md)。
+### Tailscale Direct（可选）
+
+在 Host Remote 设置中开启 Direct 后，Host 只在本机 Tailscale 地址上监听 WebSocket（默认端口 `47400`，
+可用 MagicDNS `*.ts.net` 或 tailnet IP 访问）。已经通过 Server 授权并固定 Host 身份的 Client 可以
+直接连接，仍然使用同一套 Noise IK 端到端加密，运行时不经过 Server。未授权的 Client 会在 Noise
+握手前被拒绝；Direct 不是设备注册机制，也不改变 LAN/P2P/TURN/Relay 行为。
+
+网络拓扑、控制面与数据面、NAT、降级、重连语义和当前验证状态详见[网络与传输](docs/network.md)；
+信任模型、listener 规则和限制见 [Direct（Tailscale）传输](docs/design/direct-tailscale.md)。
 
 
 ## 安全边界

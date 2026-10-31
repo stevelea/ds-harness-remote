@@ -23,7 +23,7 @@ export interface PeerConnectionContext {
 
 export interface ConnectedPeer {
   deviceId: string
-  mode?: 'LAN' | 'P2P' | 'TURN' | 'Relay'
+  mode?: 'LAN' | 'P2P' | 'TURN' | 'Relay' | 'Direct'
 }
 
 /**
@@ -139,7 +139,7 @@ export class ConnectionController {
     return peers.length === 1 ? peers[0] : undefined
   }
 
-  connectionMode(): 'LAN' | 'P2P' | 'TURN' | 'Relay' | 'Disconnected' {
+  connectionMode(): 'LAN' | 'P2P' | 'TURN' | 'Relay' | 'Direct' | 'Disconnected' {
     const connection = this.active.values().next().value as ActiveConnection | undefined
     return connection?.channel.mode ?? (connection === undefined ? 'Disconnected' : 'Relay')
   }

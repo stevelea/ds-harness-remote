@@ -1,3 +1,17 @@
+## Unreleased — Direct over Tailscale
+
+### English
+
+- Add an optional serverless Direct transport: a Host with Tailscale can bind a listener only on its tailnet addresses, and an already-authorized Client can connect to it directly with the existing Noise IK end-to-end encryption and no Remote Server in the runtime path.
+- Host settings gain a Direct over Tailscale toggle, port and detected endpoints; the Client can save a Direct address for an already-pinned Host and connect from the Remote host picker. The new carrier is displayed as `Direct`.
+- Direct mode is disabled by default, rejects unknown Clients before the Noise handshake, refuses public/wildcard bind addresses, and leaves LAN/P2P/TURN/Relay behavior unchanged.
+
+### 中文
+
+- 新增可选的无 Server Direct 传输：安装 Tailscale 的 Host 只在本机 tailnet 地址上监听，已经授权的 Client 可以直连，继续使用既有 Noise IK 端到端加密，运行时不依赖 Remote Server。
+- Host 设置新增 Direct over Tailscale 开关、端口与检测到的端点；Client 可为已固定的 Host 保存 Direct 地址并从 Remote 主机列表直连。新链路显示为 `Direct`。
+- Direct 默认关闭，未授权 Client 在 Noise 握手前即被拒绝，禁止绑定公网/通配地址，不改变 LAN/P2P/TURN/Relay 行为。
+
 ## 0.6.0 — 2026-10-29
 
 Android build 69.

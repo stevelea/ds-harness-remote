@@ -14,6 +14,11 @@ LAN -> P2P -> TURN -> Relay
 
 无论选择哪条路径，Harness 业务消息都先经过 Noise 端到端加密。网络层只搬运密文，不改变身份验证和业务权限边界。详细安全说明见[端到端加密](end-to-end-encryption.md)。
 
+可选地，Host 与 Client 若同属一个 Tailscale tailnet，可以启用 **Direct** 模式：Host 只绑定本机
+检测到的 tailnet 地址，Client 直接以 WebSocket 连接该地址，不经过 Server。Direct 是独立于
+上面四条路径的 opt-in 模式，不参与 `LAN -> P2P -> TURN -> Relay` 自适应降级；见下文
+「Direct（Tailscale，可选）」。
+
 ## 1. 网络拓扑
 
 ```text
@@ -109,6 +114,7 @@ Control frame 不得包含 Harness 业务明文。Server 需要读取路由信�
 | `P2P` | WebRTC DataChannel | 公网、NAT 穿透或 overlay 网络直连 | 否 |
 | `TURN` | WebRTC DataChannel 经 TURN relay | 无法直接打洞，但允许 TURN | TURN 转发 Noise ciphertext |
 | `Relay` | 独立 WSS data WebSocket 的 `relay` frame；旧客户端使用 Control channel | WebRTC 不可用、协商失败或网络受限 | Relay node 转发 Noise ciphertext |
+| `Direct` | Client → Host 的 tailnet WebSocket（`/direct/v1`），内层 Noise IK | 两端在同一 Tailscale tailnet，Host 显式开启 Direct | 不经过 Server；WireGuard 承载链路，Noise 承载业务 |
 
 ### LAN
 
@@ -130,7 +136,21 @@ Relay 通过分配的 WSS data endpoint 转发 Base64URL 编码的 Noise ciphert
 企业代理和严格 NAT 更稳健。旧客户端没有 attach 能力时，Server 保留 Control WebSocket
 兼容路径。Relay node 和 Server 均禁止解密、解析、持久化或记录 Relay ciphertext。
 
-## 5. 自适应尝试与降级
+### Direct（Tailscale，可选）
+
+Direct 不是 WebRTC candidate pair 的分类结果，而是 Host 显式开启的第二条数据面：
+
+- Host `direct.enabled` 时只绑定本机检测到的 Tailscale 地址（`100.64.0.0/10`、
+  `fd7a:115c:a1e0::/48`），不绑定通配/公网/RFC1918 地址；未检测到 Tailscale 时 listener 不启动。
+- Client 必须已经通过既有 Server 流程固定该 Host 身份；Host 也只接受本地 trusted 的 Client，
+  否则在 Noise 之前拒绝。
+- 双方以既有 Noise IK + `createNoisePrologue(connectionId, hostDeviceId, clientDeviceId)`
+  建立业务通道；业务 RPC、权限、终端、文件、Codex/ACP 语义不变。
+- Direct 连接与 Server 连接可以同时存在，在 `ConnectionController` 中按 connectionId 隔离。
+- 该模式不自动发现 Host，也不需要 Server 在线；端点由 Host 设置页展示，Client 保存一次即可。
+  首次配对仍来自 Server 授权，Direct 不是设备注册机制。
+
+### 5. 自适应尝试与降级
 
 默认 Client 会按能力和运行环境尝试：
 
@@ -213,9 +233,13 @@ Client 可以把当前模式显示为 `LAN`、`P2P`、`TURN`、`Relay` 或 `Disc
 - WebRTC offer/answer/ICE、STUN/TURN 短期 credential 接入；
 - LAN/P2P/TURN 路径识别、DataChannel chunking 与 Relay fallback；
 - Desktop Plugin、Android 和 VS Code Client 的 Adaptive transport 接入；
-- 所有路径上的 Noise E2EE 与按 connection 隔离。
+- 所有路径上的 Noise E2EE 与按 connection 隔离；
+- 可选 Direct（Tailscale）传输：仅绑定 tailnet 地址的 Host listener、Noise IK 双向身份校验、
+  按方向 counter、心跳/idle 关闭，以及 Client 侧已保存端点的直连。
 
 仍需完成或扩大验证：
+- Direct 的真实双机 Tailscale E2E、Desktop/Android UI 流程、Windows/Linux 绑定、长期 idle 与重连；
+
 
 - rc.2/alpha.1/alpha.2 真实 Harness 双机与跨网 E2E；
 - Android `react-native-webrtc` 与 Host WebRTC runtime 的真机 P2P/TURN 互操作；
@@ -233,4 +257,8 @@ Client 可以把当前模式显示为 `LAN`、`P2P`、`TURN`、`Relay` 或 `Disc
 - Host signaling 与连接管理：`packages/plugin/src/server-connection.ts`
 - Client 连接编排：`packages/plugin/src/client-runtime.ts`
 - 规范性协议：[Remote Protocol v1 §10–14](protocol.md#10-control-channel)
+- Direct（Tailscale）传输：`packages/plugin/src/direct-tailscale.ts`（检测/端点解析）、
+  `packages/plugin/src/direct-host-listener.ts`（Host listener 与 channel）、
+  `packages/webrtc/src/direct-transport.ts`（Client carrier）、
+  `packages/protocol/src/index.ts` §28 Direct frames。
 - 尚未完成的验证：[TODO](TODO.md)

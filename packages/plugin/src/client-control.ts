@@ -6,6 +6,7 @@ import type { HarnessMode } from './harness-target.js'
 import { probeRemoteHostFeatures } from './client-capabilities.js'
 import type {
   ConnectedRemote,
+  DirectHostsView,
   HostAuthorizationControl,
   RemoteDeviceView,
   RemoteDirectoryListing,
@@ -51,6 +52,11 @@ export interface ClientControlContext {
   readonly host: HostAuthorizationControl | undefined
   readonly setHostAuthorization: (enabled: boolean) => Promise<unknown>
   readonly setMode: (mode: HarnessMode, targetDeviceId?: string, signal?: AbortSignal) => Promise<Record<string, unknown>>
+  readonly listDirectHosts: () => Promise<DirectHostsView>
+  readonly addDirectHost: (hostDeviceId: string, endpoint: string) => Promise<DirectHostsView>
+  readonly removeDirectHost: (hostDeviceId: string) => Promise<DirectHostsView>
+  readonly connectDirect: (input: { hostDeviceId: string; endpoint?: string }, signal?: AbortSignal) => Promise<Record<string, unknown>>
+  readonly disconnectDirect: () => Promise<Record<string, unknown>>
 }
 
 export class ClientControl {
@@ -310,6 +316,30 @@ export class ClientControl {
         }
         return ok(await this.context.host.authorizeHostWithCode(value.code))
       }
+      if (endpoint === 'direct.hosts.list') return ok(await this.context.listDirectHosts())
+      if (endpoint === 'direct.host.add') {
+        const value = record(payload)
+        directKeys(value, ['hostDeviceId', 'endpoint'])
+        return ok(await this.context.addDirectHost(
+          directHostId(value.hostDeviceId),
+          directEndpoint(value.endpoint),
+        ))
+      }
+      if (endpoint === 'direct.host.remove') {
+        const value = record(payload)
+        directKeys(value, ['hostDeviceId'])
+        return ok(await this.context.removeDirectHost(directHostId(value.hostDeviceId)))
+      }
+      if (endpoint === 'direct.connect') {
+        const value = record(payload)
+        directKeys(value, ['hostDeviceId', 'endpoint'])
+        const directAddress = value.endpoint === undefined ? undefined : directEndpoint(value.endpoint)
+        return ok(await this.context.connectDirect({
+          hostDeviceId: directHostId(value.hostDeviceId),
+          ...(directAddress === undefined ? {} : { endpoint: directAddress }),
+        }, signal))
+      }
+      if (endpoint === 'direct.disconnect') return ok(await this.context.disconnectDirect())
       if (endpoint === 'mode.set') {
         const value = record(payload)
         if (value.mode !== 'local' && value.mode !== 'remote') throw new ClientModeError('INVALID_MESSAGE', 'Mode must be local or remote.')
@@ -320,4 +350,25 @@ export class ClientControl {
       return fail(error)
     }
   }
+}
+
+/** Strict payload shape for the Direct control endpoints. */
+function directKeys(value: Record<string, unknown>, allowed: readonly string[]): void {
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) throw new ClientModeError('INVALID_MESSAGE', 'The Direct request payload is invalid.')
+  }
+}
+
+function directHostId(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 128) {
+    throw new ClientModeError('INVALID_MESSAGE', 'An authorized Host device ID is required.')
+  }
+  return value
+}
+
+function directEndpoint(value: unknown): string {
+  if (typeof value !== 'string' || value.trim() === '' || value.length > 512) {
+    throw new ClientModeError('INVALID_MESSAGE', 'A Direct host address is required.')
+  }
+  return value.trim()
 }

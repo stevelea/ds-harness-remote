@@ -184,7 +184,7 @@ Desktop 默认保留的 `desktop` profile，只能由其官方 launcher 管理�
 ## Implementation Rules
 
 1. `docs/protocol.md` 是线协议权威来源。代码与文档冲突时，先按协议实现；必要的协议澄清必须同步更新文档和共享类型。
-2. Plugin 不监听公网端口，只建立出站连接。
+2. Plugin 默认不监听任何端口，只建立出站连接。唯一例外是本文件「Direct (Tailscale) transport (2026-10-31)」记录的 opt-in Direct listener：仅在 `direct.enabled` 时绑定本机检测到的 tailnet 地址，禁止通配/公网/RFC1918/link-local 绑定，且只接受已由既有 Server 流程固定身份的 Client。
 3. Remote business message 只能进入已认证的加密 channel；明文、未知 connection、错误 target、重放和 identity mismatch 必须 fail closed。
 4. Server membership 与 Host 本地 trusted peer 必须同时成立。
 5. v1 permission decision 只允许 `allow_once | deny`，禁止恢复 `allow_session`。
@@ -799,3 +799,38 @@ Remote 窗口先通过 loopback `client.authorization.status` 只读检查本地
 保留已知列表，不将失败解释为退出登录；明确授权错误码才回登录。空主机文案仅用于
 成功的空列表，不用于请求失败。Plugin check、client-runtime 17 个核心测试、build、
 DSH bundle 与 diff check 通过；未新增 Windows 首次安装或跨设备验收。
+
+
+## Direct (Tailscale) transport (2026-10-31)
+
+新增可选的无 Server 数据面：Host 开启 `direct.enabled` 时只绑定本机检测到的 Tailscale 地址
+（`100.64.0.0/10`、`fd7a:115c:a1e0::/48`；默认端口 47400，`/direct/v1`），Client 通过
+MagicDNS 或 tailnet IP 直连 Host，不经过 Server。该功能不改变 Server Control 协议：
+Direct frame 独立版本化，Server 永不接收；Server 侧 `transport.selected` 仍只有
+`lan | p2p | turn | relay`，Client 本地把该 carrier 显示为 `Direct`。
+
+信任模型复用既有授权：Host 只接受本地 `IdentityStore` trusted peers 中的 Client，Client 只
+接受本地 pinned 的 Host key；双方使用既有 `Noise_IK_25519_ChaChaPoly_SHA256` 与
+`createNoisePrologue(connectionId, hostDeviceId, clientDeviceId)`，Host 在 Noise 完成后才把
+channel 交给 `ConnectionController`。未 trusted 的 device id 在 Noise 之前以
+`DIRECT_TRUST_REQUIRED` 拒绝。Direct 不提供首次配对，也不是账号/设备注册机制；首次授权仍走
+Server。实现入口：`packages/plugin/src/direct-tailscale.ts`（检测/端点校验）、
+`packages/plugin/src/direct-host-listener.ts`（listener + channel）、
+`packages/webrtc/src/direct-transport.ts`（Client carrier）、
+`packages/protocol/src/index.ts` §Direct frames；规范见 `docs/protocol.md §28`。
+
+安全边界：仅 text frame；Direct frame ≤1 MiB；hello 5 s、Noise 15 s、心跳 25 s、idle 75 s；
+每方向 counter 必须与 Noise nonce 一致，重复/跳号/超限 fail closed；同时最多 16 条已认证连接、
+8 条握手中 socket；绑定地址必须分类为 tailnet（loopback 仅供测试 seam）。不需要 TLS：
+WireGuard 保护链路、Noise 保护业务；`wss://` 仅用于自建 TLS 终止。禁止把 Direct 失败降级为
+Server Relay 或明文，也禁止把 Direct 端点/身份密钥写入日志。
+
+验证：`packages/protocol/tests/direct-frame.test.ts`、`packages/webrtc/tests/direct-transport.test.ts`、
+`packages/plugin/tests/direct-tailscale.test.ts`、`direct-host-listener.test.ts`、
+`direct-runtime-e2e.test.ts` 覆盖 frame 校验、hello/ready 协商、真实 WebSocket + Noise IK、未授权
+Client 拒绝、pinned key 不匹配、非法 frame 关闭、Tailscale 未检测状态，以及 Client runtime →
+Host `ConnectionController` 的真实 RPC E2E。本轮 `pnpm -r check` 与 `pnpm -r test` 通过（Plugin
+69 文件 / 501 tests、Android 44 / 278、webrtc 64、client-core 47），插件 bundle 重建后
+`node scripts/verify-dsh-plugin.mjs` 通过（0.6.0），`git diff --check` 通过。尚未验证：真实双机
+Tailscale E2E、Desktop/Android 图形界面与真机、Windows/Linux 绑定、长期 idle/重连；不得把本机
+自动化验证当作跨设备验收。

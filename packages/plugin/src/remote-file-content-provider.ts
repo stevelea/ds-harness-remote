@@ -37,7 +37,7 @@ export type RemoteFileControlCall = <T>(
 
 export interface RemoteFileViewerStatus {
   mode: 'local' | 'remote'
-  transport?: 'LAN' | 'P2P' | 'TURN' | 'Relay' | 'Disconnected'
+  transport?: 'LAN' | 'P2P' | 'TURN' | 'Relay' | 'Direct' | 'Disconnected'
   remoteFeatures?: { fileViewer: boolean }
 }
 

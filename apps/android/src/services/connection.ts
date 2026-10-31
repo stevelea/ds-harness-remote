@@ -1,5 +1,6 @@
 import { AgentAcpClient, CodexRemoteClient, HarnessAlphaClient, RemoteClientCore, RemoteTypertGateway, probeRemoteHostFeatures, remoteWorkspaceTypeAvailable, type RemoteHostFeatures } from '@dsh-remote/client-core'
-import { AdaptiveTransport, type AdaptiveConnectionDetails, type RtcIceServer } from '@dsh-remote/webrtc'
+import { AdaptiveTransport, DirectTransport, type AdaptiveConnectionDetails, type DirectTransportOptions, type RtcIceServer } from '@dsh-remote/webrtc'
+import { normalizeDirectEndpoint } from '../lib/direct-endpoint'
 import { websocketUrl } from '../lib/server-url'
 import { strings } from '../locales/i18n'
 import type { DeviceIdentity, MuxStreamFrame, RemoteDevice } from '../types'
@@ -18,6 +19,8 @@ export interface AndroidConnectionOptions {
   fetchIceServers?: (connectionId: string) => Promise<RtcIceServer[]>
   onSecureHandshake?: () => void
   onClose?: CloseHandler
+  /** Test seam for the Direct (Tailscale) socket; production uses the platform WebSocket. */
+  directWebSocketFactory?: DirectTransportOptions['webSocketFactory']
 }
 
 export class AndroidRemoteConnection {
@@ -35,6 +38,7 @@ export class AndroidRemoteConnection {
   private unsubscribeArchived?: () => void
   private muxHandler?: MuxFrameHandler
   private transport?: AdaptiveTransport
+  private directTransport?: DirectTransport
   private connectionAttempt = 0
   private healthTimer?: ReturnType<typeof setTimeout>
   private healthFlight?: { core: RemoteClientCore; result: Promise<boolean> }
@@ -109,22 +113,7 @@ export class AndroidRemoteConnection {
         35_000,
       )
       this.core = core
-      this.unsubscribeClose = core.onClose(() => {
-        // A late close from a replaced connection must not tear down the new
-        // connection that may already be stored on this instance.
-        if (this.core !== core) return
-        this.clearHealthTimer()
-        void this.closeMux?.(false)
-        this.closeMux = undefined
-        this.core = undefined
-        this.proxy = undefined
-        this.codex = undefined
-        this.codexAvailable = false
-        this.cursor = undefined
-        this.acpBackends.clear()
-        this.sessionTools = undefined
-        if (!replacingFallback) options.onClose?.({ retryable: retryableClose })
-      })
+      this.installCloseHandler(core, options, () => !replacingFallback, () => retryableClose)
       await core.connect()
       if (attempt !== this.connectionAttempt || this.core !== core) throw new Error('The connection attempt was superseded.')
       return core
@@ -145,47 +134,133 @@ export class AndroidRemoteConnection {
         webRtcFallback = false
         core = await connectCore(true)
       }
-      const features = await probeRemoteHostFeatures(core, host.clientVersion)
-      if (attempt !== this.connectionAttempt || this.core !== core) throw new Error('The connection attempt was superseded.')
-      const emitFrame = (frame: MuxStreamFrame) => {
-        if (this.core !== core) return
-        if (frame.payload.type === 'stream/closed' && frame.payload.reason === 'failed') {
-          console.warn('[dsh-remote] Harness stream failed; closing carrier')
-          // A live carrier failure is an offline channel, even if its socket
-          // still answers. Reconnect will create a fresh follow subscription.
-          void this.close()
-          options.onClose?.()
-          return
-        }
-        this.muxHandler?.(frame)
-      }
-      this.compactHistorySupported = features.capabilities.includes('remote.history.compact.v1')
-      this.applyBackendFeatures(core, features)
-      this.unsubscribeArchived = this.cursor?.onSessionArchived(data => {
-        if (this.core === core) options.onOpencodeArchived?.(data.sessionId)
-      })
-      if (features.remoteGateway) {
-        this.sessionTools = new HarnessSessionTools(new RemoteTypertGateway(core))
-        const alpha = new HarnessAlphaClient(
-          core,
-          {
-            clientVersion: host.clientVersion,
-            harnessVersion: host.harnessVersion,
-            ...(features.sessionFormat === undefined ? {} : { sessionFormat: features.sessionFormat }),
-          },
-          frame => emitFrame(frame as unknown as MuxStreamFrame),
-        )
-        alpha.start()
-        this.proxy = alpha
-        this.closeMux = async (notifyRemote = true) => { await alpha.close(notifyRemote) }
-      } else {
-        throw new Error('The remote Host exposes no supported Harness transport.')
-      }
-      this.scheduleHealthCheck(core)
+      await this.establishConnection(core, host, options, attempt)
     } catch (error) {
       if (attempt === this.connectionAttempt) await this.clearConnection()
       throw error
     }
+  }
+
+  /**
+   * Serverless Direct (Tailscale) path. Same Noise IK + encrypted business
+   * channel as `connect`, but carried by a tailnet-only WebSocket with no
+   * Server, credentials, or relay frames involved.
+   *
+   * Fail closed before any business message can flow:
+   * - the saved Host must still be trusted with a pinned Noise identity key;
+   * - the address must be a Tailscale/loopback target;
+   * - `DirectTransport` rejects a `direct.ready` whose hostDeviceId differs
+   *   from the pinned `host.deviceId`;
+   * - `SecureTransport` (Noise IK) rejects a peer that does not hold the
+   *   pinned Host key.
+   */
+  async connectDirect(
+    endpoint: string,
+    identity: DeviceIdentity,
+    host: RemoteDevice,
+    onFrame: MuxFrameHandler,
+    options: AndroidConnectionOptions = {},
+  ): Promise<void> {
+    // Replacing a connection must not wait for a graceful stream-close RPC.
+    const attempt = ++this.connectionAttempt
+    await this.clearConnection()
+    if (attempt !== this.connectionAttempt) throw new Error('The connection attempt was superseded.')
+    if (!host.trusted) throw new Error(strings.runtime.directUntrustedHost)
+    if (host.identityKey.trim().length === 0) throw new Error(strings.runtime.hostMissingKey)
+    const url = DirectTransport.endpointUrl(normalizeDirectEndpoint(endpoint))
+    this.muxHandler = onFrame
+    const directTransport = new DirectTransport(url, {
+      deviceId: identity.deviceId,
+      hostDeviceId: host.deviceId,
+      ...(options.directWebSocketFactory === undefined ? {} : { webSocketFactory: options.directWebSocketFactory }),
+    })
+    this.directTransport = directTransport
+    const core = new RemoteClientCore(
+      new SecureTransport(directTransport, identity, host, options.onSecureHandshake),
+      35_000,
+    )
+    this.core = core
+    // A post-connect Direct close is a lost channel like any other offline
+    // carrier: allow the bounded recovery owner to reconnect via Direct.
+    this.installCloseHandler(core, options, () => true, () => true)
+    try {
+      await core.connect()
+      if (attempt !== this.connectionAttempt || this.core !== core) throw new Error('The connection attempt was superseded.')
+      await this.establishConnection(core, host, options, attempt)
+    } catch (error) {
+      if (attempt === this.connectionAttempt) await this.clearConnection()
+      throw error
+    }
+  }
+
+  /** Capability probe, business client setup, and health monitoring shared by both paths. */
+  private async establishConnection(
+    core: RemoteClientCore,
+    host: RemoteDevice,
+    options: AndroidConnectionOptions,
+    attempt: number,
+  ): Promise<void> {
+    const features = await probeRemoteHostFeatures(core, host.clientVersion)
+    if (attempt !== this.connectionAttempt || this.core !== core) throw new Error('The connection attempt was superseded.')
+    const emitFrame = (frame: MuxStreamFrame) => {
+      if (this.core !== core) return
+      if (frame.payload.type === 'stream/closed' && frame.payload.reason === 'failed') {
+        console.warn('[dsh-remote] Harness stream failed; closing carrier')
+        // A live carrier failure is an offline channel, even if its socket
+        // still answers. Reconnect will create a fresh follow subscription.
+        void this.close()
+        options.onClose?.()
+        return
+      }
+      this.muxHandler?.(frame)
+    }
+    this.compactHistorySupported = features.capabilities.includes('remote.history.compact.v1')
+    this.applyBackendFeatures(core, features)
+    this.unsubscribeArchived = this.cursor?.onSessionArchived(data => {
+      if (this.core === core) options.onOpencodeArchived?.(data.sessionId)
+    })
+    if (features.remoteGateway) {
+      this.sessionTools = new HarnessSessionTools(new RemoteTypertGateway(core))
+      const alpha = new HarnessAlphaClient(
+        core,
+        {
+          clientVersion: host.clientVersion,
+          harnessVersion: host.harnessVersion,
+          ...(features.sessionFormat === undefined ? {} : { sessionFormat: features.sessionFormat }),
+        },
+        frame => emitFrame(frame as unknown as MuxStreamFrame),
+      )
+      alpha.start()
+      this.proxy = alpha
+      this.closeMux = async (notifyRemote = true) => { await alpha.close(notifyRemote) }
+    } else {
+      throw new Error('The remote Host exposes no supported Harness transport.')
+    }
+    this.scheduleHealthCheck(core)
+  }
+
+  private installCloseHandler(
+    core: RemoteClientCore,
+    options: AndroidConnectionOptions,
+    canNotify: () => boolean,
+    retryable: () => boolean,
+  ): void {
+    this.unsubscribeClose = core.onClose(() => {
+      // A late close from a replaced connection must not tear down the new
+      // connection that may already be stored on this instance.
+      if (this.core !== core) return
+      this.clearHealthTimer()
+      void this.closeMux?.(false)
+      this.closeMux = undefined
+      this.core = undefined
+      this.proxy = undefined
+      this.codex = undefined
+      this.codexAvailable = false
+      this.cursor = undefined
+      this.acpBackends.clear()
+      this.sessionTools = undefined
+      if (canNotify()) options.onClose?.({ retryable: retryable() })
+    })
   }
 
   /** Reprobe readiness on workspace refresh so Host backend switches need no reconnect. */
@@ -369,6 +444,22 @@ export class AndroidRemoteConnection {
   }
 
   async getNetworkDetails(): Promise<AdaptiveConnectionDetails | undefined> {
+    const direct = this.directTransport
+    if (direct !== undefined) {
+      // Present the Direct channel through the same diagnostics shape the UI
+      // already consumes; there are no ICE candidates or relay endpoints.
+      const details = await direct.connectionDetails()
+      return {
+        ...(details.connectionId === undefined ? {} : { connectionId: details.connectionId }),
+        ...(details.connectedAt === undefined ? {} : { connectedAt: details.connectedAt }),
+        ...(details.heartbeatIntervalMs === undefined ? {} : { heartbeatIntervalMs: details.heartbeatIntervalMs }),
+        controlChannelUrl: details.endpoint,
+        controlChannelState: details.socketState,
+        preferredTransports: [],
+        negotiatedCapabilities: details.capabilities,
+        webRtcEnabled: false,
+      }
+    }
     return await this.transport?.connectionDetails()
   }
 
@@ -392,6 +483,7 @@ export class AndroidRemoteConnection {
     this.unsubscribeArchived?.()
     this.unsubscribeArchived = undefined
     this.transport = undefined
+    this.directTransport = undefined
     this.proxy = undefined
     this.codex = undefined
     this.codexAvailable = false

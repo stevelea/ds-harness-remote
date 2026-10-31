@@ -1481,6 +1481,7 @@ function config(): ResolvedConfig {
   return {
     terminal: { enabled: false },
     loopback: { ports: [] },
+    direct: { enabled: false, port: 47400 },
     enabled: true,
     role: 'both',
     serverUrl: 'https://dsh.r2049.cn',

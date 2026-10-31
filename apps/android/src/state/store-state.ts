@@ -6,6 +6,7 @@ import type {
   AgentPresetOption,
   ChatItem,
   ChatMessage,
+  ConnectionMode,
   ConnectionNetworkDetails,
   ConnectionProbeTransport,
   ConnectionSnapshot,
@@ -55,6 +56,10 @@ export interface AppState {
   devices: RemoteDevice[]
   selectedDevice?: RemoteDevice
   connection: ConnectionSnapshot
+  /** The path the current (or most recent) connection attempt used. */
+  connectionMode: ConnectionMode
+  /** Saved Direct address of the current/recovering Host; cleared on a Server connect. */
+  directEndpoint?: string
   connectionStage?: ConnectionStage
   connectionProbeOrder: ConnectionProbeTransport[]
   connectionNetworkDetails?: ConnectionNetworkDetails
@@ -147,7 +152,9 @@ export interface AppState {
   trustDevice(device: RemoteDevice): Promise<boolean>
   forgetDevice(deviceId: string): Promise<boolean>
   renameDevice(deviceId: string, name: string): Promise<boolean>
-  connectDevice(device: RemoteDevice, options?: { forceRelay?: boolean }): Promise<boolean>
+  connectDevice(device: RemoteDevice, options?: { forceRelay?: boolean; mode?: ConnectionMode; endpoint?: string }): Promise<boolean>
+  /** Connect without the Server using an already-saved endpoint for this trusted Host. */
+  connectDirectDevice(device: RemoteDevice, endpoint: string): Promise<boolean>
   reconnect(options?: { forceRelay?: boolean; restoreSession?: boolean }): Promise<boolean>
   disconnect(): Promise<void>
   openSession(session: RemoteSession): Promise<boolean>

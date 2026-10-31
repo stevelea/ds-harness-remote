@@ -34,6 +34,7 @@
 - [ACP Remote / Agent adapters](acp-remote.md)：说明 Agent ACP gateway、后端 adapter、allowlist 与配置。
 - [端到端加密](end-to-end-encryption.md)：解释 Noise IK、设备身份固定、密钥生命周期、Server 可见元数据、重放保护与安全边界。
 - [网络与传输](network.md)：解释出站连接、Control/Data plane、LAN/P2P/TURN/Relay 选路、NAT、降级、断线恢复与当前验证状态。
+- [Direct（Tailscale）传输](design/direct-tailscale.md)：可选的无 Server 直连模式，包含信任模型、listener 规则、限制与验证边界。
 - [版本兼容说明](compatibility.zh.md)（[English](compatibility.md)）：记录 Plugin 与各版本 DeepSeek Harness 的 carrier、Session 和 Desktop 兼容范围。
 
 ## 历史资料
