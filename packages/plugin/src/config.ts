@@ -4,6 +4,8 @@ import s from '@deepseek-ai/schemastery'
 import { z } from 'zod'
 
 export const DEFAULT_REMOTE_SERVER_URL = 'https://dsh.r2049.cn'
+/** Default port for the opt-in serverless Direct (Tailscale) listener. */
+export const DEFAULT_DIRECT_PORT = 47400
 
 export interface Config {
   enabled?: boolean
@@ -14,6 +16,16 @@ export interface Config {
   remoteTools?: { enabled?: boolean }
   hostControl?: { enabled?: boolean }
   loopback?: { ports?: number[] }
+  /**
+   * Opt-in serverless Direct transport. When enabled the Host listens on its
+   * Tailscale addresses only; Clients that already pinned this Host can connect
+   * without a relay Server. Default: disabled.
+   */
+  direct?: {
+    enabled?: boolean
+    /** TCP port for the Direct WebSocket listener; must be reachable on the tailnet only. */
+    port?: number
+  }
   forceRelay?: boolean
   /**
    * When a known peer device presents a NEW identity key after re-authorizing with the
@@ -82,6 +94,7 @@ export interface ResolvedConfig {
   remoteTools?: { enabled: boolean }
   hostControl?: { enabled: boolean }
   loopback: { ports: number[] }
+  direct: { enabled: boolean; port: number }
   codex: ResolvedCodexConfig
   cursor: ResolvedCursorConfig
   acp?: ResolvedAcpConfig
@@ -110,6 +123,7 @@ const entryConfigSchema = s.object({
   remoteTools: s.object({ enabled: s.boolean() }),
   hostControl: s.object({ enabled: s.boolean() }),
   loopback: s.object({ ports: s.array(s.number()) }),
+  direct: s.object({ enabled: s.boolean(), port: s.number() }),
   forceRelay: s.boolean(),
   rotatePinnedPeerKey: s.boolean(),
   logLevel: s.union(['debug', 'info', 'warn', 'error'] as const),
@@ -165,6 +179,10 @@ const configSchema = z.object({
   remoteTools: z.object({ enabled: z.boolean().optional() }).strict().optional(),
   hostControl: z.object({ enabled: z.boolean().optional() }).strict().optional(),
   loopback: z.object({ ports: z.array(z.number().int().min(1024).max(65535)).max(16).optional() }).strict().optional(),
+  direct: z.object({
+    enabled: z.boolean().optional(),
+    port: z.number().int().min(1024).max(65535).optional(),
+  }).strict().optional(),
   forceRelay: z.boolean().optional(),
   rotatePinnedPeerKey: z.boolean().optional(),
   logLevel: z.enum(['debug', 'info', 'warn', 'error']).optional(),
@@ -208,6 +226,10 @@ export function resolveConfig(input: ConfigInput = {}, env: NodeJS.ProcessEnv = 
     terminal: { enabled: parsed.terminal?.enabled ?? (env.DSH_REMOTE_TERMINAL_ENABLED === undefined || env.DSH_REMOTE_TERMINAL_ENABLED === 'true') },
     remoteTools: { enabled: parsed.remoteTools?.enabled ?? true },
     loopback: { ports: [...new Set(parsed.loopback?.ports ?? [])] },
+    direct: {
+      enabled: parsed.direct?.enabled ?? env.DSH_REMOTE_DIRECT_ENABLED === 'true',
+      port: parsed.direct?.port ?? parseDirectPort(env.DSH_REMOTE_DIRECT_PORT) ?? DEFAULT_DIRECT_PORT,
+    },
     forceRelay: parsed.forceRelay ?? false,
     rotatePinnedPeerKey: parsed.rotatePinnedPeerKey ?? false,
     logLevel: parsed.logLevel ?? 'info',
@@ -247,6 +269,12 @@ export function resolveConfig(input: ConfigInput = {}, env: NodeJS.ProcessEnv = 
       }),
     },
   }
+}
+
+function parseDirectPort(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === '') return undefined
+  const port = Number(value)
+  return Number.isSafeInteger(port) && port >= 1024 && port <= 65535 ? port : undefined
 }
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]'])

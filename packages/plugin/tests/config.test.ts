@@ -22,6 +22,19 @@ describe('plugin config', () => {
     expect(resolveConfig({ remoteTools: { enabled: false } }, {}).remoteTools?.enabled).toBe(false)
   })
 
+  it('keeps the Direct (Tailscale) listener disabled by default and validates its port', () => {
+    expect(resolveConfig({}, {})).toMatchObject({ direct: { enabled: false, port: 47400 } })
+    expect(resolveConfig({ direct: { enabled: true } }, {})).toMatchObject({ direct: { enabled: true, port: 47400 } })
+    expect(resolveConfig({ direct: { enabled: true, port: 47500 } }, {})).toMatchObject({ direct: { enabled: true, port: 47500 } })
+    expect(resolveConfig({}, { DSH_REMOTE_DIRECT_ENABLED: 'true', DSH_REMOTE_DIRECT_PORT: '47600' })).toMatchObject({
+      direct: { enabled: true, port: 47600 },
+    })
+    expect(resolveConfig({}, { DSH_REMOTE_DIRECT_PORT: 'not-a-port' }).direct.port).toBe(47400)
+    expect(() => resolveConfig({ direct: { port: 80 } } as never)).toThrow()
+    expect(() => resolveConfig({ direct: { port: 70000 } } as never)).toThrow()
+    expect(() => resolveConfig({ direct: { enabled: true, extra: true } } as never)).toThrow()
+  })
+
   it('allows the default-on Codex domain to be disabled and rejects obsolete workspace filters', () => {
     expect(resolveConfig({ codex: { enabled: false } }, {})).toMatchObject({
       codex: { enabled: false, binary: 'codex' },

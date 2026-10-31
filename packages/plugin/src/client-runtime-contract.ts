@@ -1,8 +1,9 @@
 import type { ControlResult } from './control-result.js'
 import { RemoteClientCore } from '@dsh-remote/client-core'
 import type { CodexAppFrameData, CodexAppStreamClosedData, RemoteWorkspaceTypeDescription } from '@dsh-remote/protocol'
-import type { RtcConnectionDiagnostics, RtcIceServer } from '@dsh-remote/webrtc'
+import type { DirectTransport, RtcConnectionDiagnostics, RtcIceServer } from '@dsh-remote/webrtc'
 import { AdaptiveTransport, stunOnlyIceServers } from '@dsh-remote/webrtc'
+import type { DirectHostStatus } from './direct-host-listener.js'
 import type { ResolvedConfig } from './config.js'
 import type { TrustedPeer } from './identity-store.js'
 import type { AuthorizedPeerDevice, ServerHostDevice } from './server-api.js'
@@ -10,11 +11,36 @@ import type { AuthorizedPeerDevice, ServerHostDevice } from './server-api.js'
 export interface ConnectedRemote {
   client: RemoteClientCore
   target: TrustedPeer
-  transport: AdaptiveTransport
+  /** Server-negotiated Adaptive transport or the serverless Direct carrier. */
+  transport: AdaptiveTransport | DirectTransport
   features: RemoteHostFeatures
   progressRunId: number
   clientVersion?: string
   harnessVersion?: string
+  /** True only for the serverless Direct (Tailscale) carrier. */
+  direct?: boolean
+}
+
+/** Saved Direct host row returned to the client UI (no identity keys). */
+export interface DirectHostView {
+  hostDeviceId: string
+  hostName: string
+  platform?: string
+  endpoint: string
+  addedAt: number
+  lastConnectedAt?: number
+}
+
+/** A Host this device already pinned through the Server, offered as a Direct target. */
+export interface DirectHostCandidate {
+  hostDeviceId: string
+  name: string
+  platform?: string
+}
+
+export interface DirectHostsView {
+  hosts: DirectHostView[]
+  candidates: DirectHostCandidate[]
 }
 
 export interface RemoteHostFeatures {
@@ -61,7 +87,7 @@ export interface ConnectionProgressState {
   runId: number
   targetDeviceId: string
   phase: 'checking-host' | 'authorizing-peer' | 'probing' | 'connected'
-  activeTransports?: Array<'lan' | 'p2p' | 'turn' | 'relay'>
+  activeTransports?: Array<'direct' | 'lan' | 'p2p' | 'turn' | 'relay'>
 }
 
 export interface RemoteDirectoryEntry {
@@ -119,6 +145,9 @@ export interface HostAuthorizationControl {
   setAgentBackends?(config: ResolvedConfig): Promise<void>
   setTerminalEnabled?(enabled: boolean): void
   setLoopbackPorts?(ports: readonly number[]): void
+  /** Opt-in serverless Tailscale listener state, when the Host supports it. */
+  directStatus?(): DirectHostStatus
+  setDirect?(enabled: boolean, port: number): Promise<void>
   hostStatus(): {
     deviceId?: string
     configured: boolean
@@ -133,8 +162,9 @@ export interface HostAuthorizationControl {
       deviceId: string
       name: string
       platform?: string
-      mode?: 'LAN' | 'P2P' | 'TURN' | 'Relay'
+      mode?: 'LAN' | 'P2P' | 'TURN' | 'Relay' | 'Direct'
     }>
+    direct?: DirectHostStatus
   }
   hasStoredAuthorization?(): Promise<boolean>
   reconnectHost(): void
@@ -259,7 +289,7 @@ export function preferredTransportsForAttempt(attempt: TransportAttempt): Array<
 }
 
 export function transportPreferenceForMode(
-  mode: 'LAN' | 'P2P' | 'TURN' | 'Relay' | 'Disconnected',
+  mode: 'LAN' | 'P2P' | 'TURN' | 'Relay' | 'Direct' | 'Disconnected',
 ): 'lan' | 'p2p' | 'turn' | 'relay' | undefined {
   if (mode === 'LAN') return 'lan'
   if (mode === 'P2P') return 'p2p'

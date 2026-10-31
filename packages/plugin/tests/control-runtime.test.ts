@@ -108,6 +108,37 @@ describe('PluginControlRuntime settings setup', () => {
     expect(apply.mock.calls[0]?.[0].codex.enabled).toBe(true)
   })
 
+  it('persists Direct settings and applies them live to the running Host', async () => {
+    const directory = await temporaryDirectory()
+    const settings = settingsBinding({})
+    const setDirect = vi.fn(async () => undefined)
+    const directStatus = vi.fn(() => ({
+      enabled: true,
+      running: true,
+      port: 47500,
+      endpoints: ['100.100.1.2:47500'],
+      bindAddresses: ['100.100.1.2'],
+      activeConnections: 0,
+      pendingHandshakes: 0,
+      tailscale: { detected: true, source: 'cli' as const },
+    }))
+    const handler = register(new PluginControlRuntime(resolveConfig(settings.get()), directory, settings, undefined, {
+      setDirect,
+      directStatus,
+    } as unknown as HostAuthorizationControl))
+    await expect(handler('settings.direct.set', { enabled: true, port: 47500 }, signal())).resolves.toMatchObject({
+      ok: true,
+      value: { applies: 'live', direct: { running: true, endpoints: ['100.100.1.2:47500'] } },
+    })
+    expect(setDirect).toHaveBeenCalledWith(true, 47500)
+    expect(resolveConfig(settings.get()).direct).toEqual({ enabled: true, port: 47500 })
+
+    await expect(handler('settings.direct.set', { enabled: 'yes' }, signal())).resolves.toMatchObject({ ok: false })
+    await expect(handler('settings.direct.set', { enabled: true, port: 80 }, signal())).resolves.toMatchObject({ ok: false })
+    await expect(handler('settings.direct.set', {}, signal())).resolves.toMatchObject({ ok: false })
+    expect(setDirect).toHaveBeenCalledTimes(1)
+  })
+
   it('coexists with a Remote Web UI that already owns /remote', async () => {
     const channels = new Set(['/remote'])
     const connection = {

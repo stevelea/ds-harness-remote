@@ -15,6 +15,8 @@ import { registerControlRoute, type HostWebServerLike } from './control-route.js
 import { ControlStatusStream } from './control-stream.js'
 import { codexBinaryCandidates } from './codex/domain.js'
 import { cursorBinaryCandidates } from './acp/gateway.js'
+import type { DirectHostStatus } from './direct-host-listener.js'
+import { DEFAULT_DIRECT_PORT } from './config.js'
 
 export interface PluginSettingsView {
   config: Config
@@ -24,6 +26,8 @@ export interface PluginSettingsView {
   association?: PluginAssociation
   associations: Partial<Record<'host' | 'client', PluginAssociation>>
   acpAvailability?: Record<string, boolean>
+  /** Live Direct (Tailscale) listener state, when the Host runs it. */
+  direct?: DirectHostStatus
 }
 
 export interface PluginAssociation {
@@ -99,6 +103,7 @@ export class PluginControlRuntime {
       if (endpoint === 'settings.acp.set') return ok(await this.setAcp(payload))
       if (endpoint === 'settings.acp.add') return ok(await this.addAcp(payload))
       if (endpoint === 'settings.acp.remove') return ok(await this.removeAcp(payload))
+      if (endpoint === 'settings.direct.set') return ok(await this.setDirect(payload))
       if (endpoint === 'settings.logout') return ok(await this.logout())
       if (endpoint === 'host.authorization.set' && this.client !== undefined) {
         const value = record(payload)
@@ -402,6 +407,7 @@ export class PluginControlRuntime {
       applies: 'restart',
       associations,
       acpAvailability: Object.fromEntries((config.acp?.backends ?? []).map(item => [item.id, backendCommandAvailable(item.id, item.command ?? '')])),
+      ...(this.host?.directStatus === undefined ? {} : { direct: this.host.directStatus() }),
       ...(association === undefined ? {} : { association }),
     }
   }
@@ -429,6 +435,27 @@ export class PluginControlRuntime {
       method: credentials.authorizationMethod,
       ...(credentials.account === undefined ? {} : { account: credentials.account }),
     }
+  }
+
+  private async setDirect(payload: unknown): Promise<Record<string, unknown>> {
+    if (this.settings === undefined) {
+      throw new ClientModeError('SETTINGS_UNAVAILABLE', 'DSH user settings are unavailable in this profile.')
+    }
+    const value = record(payload)
+    if (typeof value.enabled !== 'boolean') throw new ClientModeError('INVALID_MESSAGE', 'A Direct enabled flag is required.')
+    const current = resolveConfig(this.settings.get())
+    const port = value.port === undefined ? current.direct.port : value.port
+    if (typeof port !== 'number' || !Number.isSafeInteger(port) || port < 1024 || port > 65535) {
+      throw new ClientModeError('INVALID_MESSAGE', 'Enter a Direct port between 1024 and 65535.')
+    }
+    const next = resolveConfig({ ...editableConfig(current), direct: { enabled: value.enabled, port } })
+    if (this.host?.setDirect === undefined) {
+      throw new ClientModeError('METHOD_NOT_ALLOWED', 'This plugin is not running as a Host.')
+    }
+    await this.settings.replace(editableConfig(next))
+    await this.host.setDirect(next.direct.enabled, next.direct.port)
+    this.config = next
+    return { ...await this.settingsView(), applies: 'live' }
   }
 
   private hostOnlyStatus(): Record<string, unknown> {
@@ -461,6 +488,7 @@ function editableConfig(config: ResolvedConfig): Config {
     remoteTools: config.remoteTools,
     hostControl: config.hostControl ?? { enabled: true },
     loopback: config.loopback,
+    direct: { enabled: config.direct.enabled, port: config.direct.port },
     forceRelay: config.forceRelay,
     logLevel: config.logLevel,
     reconnect: config.reconnect.enabled

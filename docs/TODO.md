@@ -13,6 +13,17 @@ Host 插件、随包 Remote 客户端和 Android 已移除 Harness `0.1.1-rc.2` 
 状态规则：勾选项只表示条目所述范围完成。源码实现、自动化验证与真机验收分别记录。
 RC.1 的源码适配与本地自动化验证见兼容性说明；不能替代真机验收。
 
+## Direct（Tailscale）传输（2026-10-31）
+
+- [x] 独立 `direct.*` v1 frame、Host tailnet-only listener、Noise IK 双向身份校验、按方向 counter、心跳/idle 关闭与安全限制；规范见 `docs/protocol.md §28`。
+- [x] Tailscale 检测（CLI LocalAPI + 接口回退）与端点解析/校验；Host 设置中的端点展示与 `settings.direct.set` 实时启停。
+- [x] Desktop Client 直连路径（Direct carrier + 既有 Noise/业务通道）、保存的 Direct host 与连接 UI；Android Client 直连路径与端点存储。
+- [ ] 真实双机 Tailscale E2E：MagicDNS 与 100.64/10、fd7a:: ULA 三种端点；Server 离线时直连、Server 在线时与 Relay 连接并存。
+- [ ] Desktop / Android 真机 UI 验收：Host 设置展示、Client 保存/连接/错误提示、断线与重连、应用后台/休眠。
+- [ ] Windows 与 Linux 的 listener 绑定、Tailscale 未安装/未运行/Stopped 时的状态展示，以及端口冲突处理。
+- [ ] 长期 idle（>75 s 心跳）、IP 变化（Tailscale reauth / 地址切换）与 Tailscale 重启后的恢复行为。
+- [ ] 多 Client 并发（上限 16 已认证 / 8 握手中）与恶意/未知设备探测的压力与限流验收。
+
 ## 2026-10-24 DS Bot 0.2.1 适配
 
 - [x] 固定放行旁问、取消与群聊继续；Android 精确识别 `/btw`，拒绝时不退回普通 Prompt，恢复当前和旧分段旁问卡片。

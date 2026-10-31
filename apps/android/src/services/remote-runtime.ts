@@ -29,12 +29,36 @@ export class AndroidRemoteRuntime {
     onFrame: MuxFrameHandler,
     options: AndroidConnectionOptions = {},
   ): Promise<void> {
+    await this.run(
+      wrapped => this.client.connect(baseUrl, identity, host, accessToken, onFrame, wrapped),
+      options,
+    )
+  }
+
+  /** Serverless Direct (Tailscale) connect; the same foreground-service lifecycle. */
+  async connectDirect(
+    endpoint: string,
+    identity: DeviceIdentity,
+    host: RemoteDevice,
+    onFrame: MuxFrameHandler,
+    options: AndroidConnectionOptions = {},
+  ): Promise<void> {
+    await this.run(
+      wrapped => this.client.connectDirect(endpoint, identity, host, onFrame, wrapped),
+      options,
+    )
+  }
+
+  private async run(
+    operation: (options: AndroidConnectionOptions) => Promise<void>,
+    options: AndroidConnectionOptions,
+  ): Promise<void> {
     const generation = ++this.generation
     this.connected = false
     try {
       await this.updateForeground(generation, true, this.recovering ? 'reconnecting' : 'connecting')
       if (generation !== this.generation) throw new Error('The connection attempt was superseded.')
-      await this.client.connect(baseUrl, identity, host, accessToken, onFrame, {
+      await operation({
         ...options,
         onClose: closeOptions => {
           if (generation !== this.generation) return

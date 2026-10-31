@@ -3,17 +3,20 @@ import * as Application from 'expo-application'
 import * as Crypto from 'expo-crypto'
 import * as Device from 'expo-device'
 import * as SecureStore from 'expo-secure-store'
+import { isDirectEndpoint, normalizeDirectEndpoint } from '../lib/direct-endpoint'
 import { isLanguagePreference, messageCatalogs, strings, type LanguagePreference } from '../locales/i18n'
 import type { Messages } from '../locales/types'
 import zhCN from '../locales/zh-CN'
 import { isThemePreference, isTypographyDensity, type ThemePreference, type TypographyDensity } from '../ui/theme'
-import type { AgentBackend, CodexPermissionPreset, DefaultPermissionPreset, DeviceCredentials, DeviceIdentity, RemoteDevice, ServerConfig, WorkspaceShortcut } from '../types'
+import type { AgentBackend, CodexPermissionPreset, DefaultPermissionPreset, DeviceCredentials, DeviceIdentity, RemoteDevice, SavedDirectEndpoint, ServerConfig, WorkspaceShortcut } from '../types'
 
 const KEYS = {
   config: 'dshremote.server.v1',
   identity: 'dshremote.identity.v1',
   credentials: 'dshremote.credentials.v1',
   trustedHosts: 'dshremote.trusted-hosts.v1',
+  /** One saved serverless Direct address per trusted Host device. */
+  directEndpoints: 'dshremote.direct-endpoints.v1',
   /** Remembered host for `resolveAutoConnectDevice`; boot routing no longer consumes it. */
   lastConnectedDeviceId: 'dshremote.last-connected-device.v1',
   transportPreference: 'dshremote.transport-preference.v1',
@@ -97,7 +100,68 @@ export async function forgetHost(deviceId: string): Promise<void> {
   await writeJson(KEYS.trustedHosts, hosts.filter(host => host.deviceId !== deviceId))
   const lastConnectedDeviceId = await loadLastConnectedDeviceId()
   if (lastConnectedDeviceId === deviceId) await clearLastConnectedDeviceId()
+  await clearDirectEndpoint(deviceId)
 }
+
+/**
+ * Saved Direct (Tailscale) endpoints, one per trusted Host device id.
+ * Invalid or tampered entries are dropped instead of being returned.
+ */
+export async function loadDirectEndpoints(): Promise<SavedDirectEndpoint[]> {
+  const stored = await readJson<{ byDevice?: Record<string, unknown> }>(KEYS.directEndpoints)
+  const byDevice = isRecord(stored?.byDevice) ? stored.byDevice : {}
+  return Object.entries(byDevice).flatMap(([deviceId, value]) => {
+    if (!isRecord(value) || !isDirectEndpoint(value.endpoint)) return []
+    return [{
+      deviceId,
+      endpoint: normalizeDirectEndpoint(value.endpoint),
+      updatedAt: typeof value.updatedAt === 'number' && Number.isFinite(value.updatedAt) ? value.updatedAt : 0,
+    }]
+  }).sort((left, right) => left.deviceId.localeCompare(right.deviceId))
+}
+
+export async function loadDirectEndpoint(deviceId: string): Promise<string | undefined> {
+  return (await loadDirectEndpoints()).find(item => item.deviceId === deviceId)?.endpoint
+}
+
+// Serialized read/modify/write so concurrent saves for different Hosts do not
+// drop each other. A failed write rejects its caller without poisoning later ones.
+let directEndpointsWrite = Promise.resolve()
+
+/** Validates and stores one Host's Direct address; resolves to the normalized value. */
+export async function saveDirectEndpoint(deviceId: string, endpoint: string): Promise<string> {
+  const normalized = normalizeDirectEndpoint(endpoint)
+  const trimmedId = deviceId.trim()
+  if (trimmedId === '') throw new Error(zhCN.validation.directInvalid)
+  const nextWrite = directEndpointsWrite.then(async () => {
+    const stored = await readJson<{ byDevice?: Record<string, unknown> }>(KEYS.directEndpoints)
+    const byDevice = isRecord(stored?.byDevice) ? { ...stored.byDevice } : {}
+    byDevice[trimmedId] = { endpoint: normalized, updatedAt: Date.now() }
+    await writeJson(KEYS.directEndpoints, { byDevice })
+  })
+  directEndpointsWrite = nextWrite.catch(() => undefined)
+  await nextWrite
+  return normalized
+}
+
+export function clearDirectEndpoint(deviceId: string): Promise<void> {
+  const trimmedId = deviceId.trim()
+  if (trimmedId === '') return Promise.resolve()
+  const nextWrite = directEndpointsWrite.then(async () => {
+    const stored = await readJson<{ byDevice?: Record<string, unknown> }>(KEYS.directEndpoints)
+    const byDevice = isRecord(stored?.byDevice) ? { ...stored.byDevice } : {}
+    if (!(trimmedId in byDevice)) return
+    delete byDevice[trimmedId]
+    if (Object.keys(byDevice).length === 0) {
+      await SecureStore.deleteItemAsync(KEYS.directEndpoints, secureOptions)
+      return
+    }
+    await writeJson(KEYS.directEndpoints, { byDevice })
+  })
+  directEndpointsWrite = nextWrite.catch(() => undefined)
+  return nextWrite
+}
+
 
 export async function loadLastConnectedDeviceId(): Promise<string | undefined> {
   const stored = await readJson<{ deviceId?: unknown }>(KEYS.lastConnectedDeviceId)

@@ -716,7 +716,9 @@ export function ConnectionScreen({ device, onBack, onConnected }: {
     if (launchedAttempt.current === attempt) return
     launchedAttempt.current = attempt
     let active = true
-    void connect(device).then(async connected => {
+    // An explicit device-list connect is always the Server path; a Direct
+    // session is only resumed through `reconnect()`.
+    void connect(device, { mode: 'server' }).then(async connected => {
       if (!connected) return
       // Match the Plugin hand-off: let assistive technology and the visible
       // progress state announce completion before replacing this screen.
@@ -1045,6 +1047,7 @@ function connectionPath(mode: string | undefined): string {
     P2P: zhCN.status.p2p,
     LAN: zhCN.status.lan,
     TURN: zhCN.status.turn,
+    Direct: zhCN.status.direct,
     Disconnected: zhCN.status.disconnected,
   }
   return mode === undefined ? zhCN.common.unavailable : names[mode] ?? mode

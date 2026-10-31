@@ -5,7 +5,7 @@ import { File, Paths } from 'expo-file-system'
 import { getContentUriAsync } from 'expo-file-system/legacy'
 import * as IntentLauncher from 'expo-intent-launcher'
 import { ActivityIndicator, Alert, Image, KeyboardAvoidingView, Linking, Modal, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
-import { Check, ChevronRight, Download, ExternalLink, Info, KeyRound, Laptop, LockKeyhole, Mail, MoreVertical, QrCode as QrCodeIcon, RotateCcw, Settings, type LucideIcon } from 'lucide-react-native'
+import { Check, ChevronRight, Download, ExternalLink, Info, KeyRound, Laptop, LockKeyhole, Mail, MoreVertical, QrCode as QrCodeIcon, RotateCcw, Settings, Zap, type LucideIcon } from 'lucide-react-native'
 import { useAppStore } from '../state/store'
 import type { QrLoginStart } from '../state/store-state'
 import { SOURCE_CODE_URL } from '../lib/links'
@@ -930,12 +930,13 @@ export function SettingsScreen({ onBack, onReset }: { onBack: () => void; onRese
   )
 }
 
-export function HomeActionsMenu({ visible, onClose, onSettings, onAbout, onDevices, onSwitchServer }: {
+export function HomeActionsMenu({ visible, onClose, onSettings, onAbout, onDevices, onDirect, onSwitchServer }: {
   visible: boolean
   onClose: () => void
   onSettings: () => void
   onAbout: () => void
   onDevices?: () => void
+  onDirect?: () => void
   onSwitchServer?: () => void
 }) {
   const insets = useSafeAreaInsets()
@@ -965,6 +966,9 @@ export function HomeActionsMenu({ visible, onClose, onSettings, onAbout, onDevic
         <ScrollView style={styles.homeMenuScroll} bounces={false} showsVerticalScrollIndicator={false} nestedScrollEnabled>
           {onDevices !== undefined && (
             <HomeMenuRow icon={Laptop} label={zhCN.devices.myDevices} onPress={onDevices} />
+          )}
+          {onDirect !== undefined && (
+            <HomeMenuRow icon={Zap} label={zhCN.direct.menu} onPress={onDirect} />
           )}
           {onSwitchServer !== undefined && <HomeMenuRow icon={RotateCcw} label={zhCN.setup.switchServer} onPress={onSwitchServer} />}
           <HomeMenuRow icon={Settings} label={zhCN.settings.title} onPress={onSettings} />

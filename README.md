@@ -50,6 +50,7 @@ The DeepSeek Harness desktop edition is supported. Install the latest release:
 - Run a terminal-only [dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI) profile as a Host.
 - No public listening port or public IP is required on the Harness Host. Connect from anywhere with internet access over a bidirectional end-to-end encrypted channel.
 - Prefer P2P connections, use TURN relay nodes worldwide, and fall back to Server Relay when needed.
+- Optional serverless Direct mode over Tailscale: when the Host and Client share a tailnet, the Client can connect straight to the Host without a Remote Server. The Host still never listens on a public interface; only detected Tailscale addresses are bound.
 - Access workspace files, read-only previews, remote terminals, and authorized local development-service previews through the native Harness sidebar.
 - CodeX and ACP terminals use the Host's default shell in the session directory and restore the terminal screen on reconnect.
 - Android keeps per-conversation drafts and reading positions, offers backend-separated search
@@ -253,7 +254,7 @@ See [End-to-end encryption](docs/end-to-end-encryption.md) for the handshake, ke
 
 ## Network and transport
 
-The Host opens outbound connections only; it does not listen on a public port or require router port forwarding.
+The Host opens outbound connections only; it does not listen on a public port or require router port forwarding. The only listener is the opt-in Direct (Tailscale) listener, which binds detected tailnet addresses and is disabled by default.
 
 Remote negotiates paths in the order `LAN -> P2P -> TURN -> Relay`.
 
@@ -261,7 +262,16 @@ When WebRTC is unavailable or cannot connect, it falls back to the encrypted Web
 
 Every path carries the same Noise ciphertext and keeps the same Host/Client identity boundary.
 
-See [Network and transport](docs/network.md) for the topology, control and data planes, NAT behavior, fallback, reconnect semantics, and current validation status.
+### Direct over Tailscale
+
+An optional serverless path: enable Direct in the Host Remote settings and the Host binds a WebSocket
+only on its Tailscale addresses (default port `47400`, MagicDNS `*.ts.net` or tailnet IP). A Client that
+was already authorized through the Server and pinned the Host identity can then connect directly, with
+the same Noise IK end-to-end encryption and no Server in the runtime path. Unknown Clients are rejected
+before the Noise handshake; Direct is not a device-enrollment mechanism and does not change
+LAN/P2P/TURN/Relay behavior.
+
+See [Network and transport](docs/network.md) for the topology, control and data planes, NAT behavior, fallback, reconnect semantics, and current validation status. See [Direct (Tailscale) transport](docs/design/direct-tailscale.md) for the trust model, listener rules and limitations.
 
 ## Security
 

@@ -4,10 +4,14 @@ import {
   connectionErrorMessage,
   connectionStatusClass,
   connectionStatusLabel,
+  directStatusErrorLabel,
   formatLocalTime,
   messageOf,
 } from './presentation.js'
-import type { ClientReact, PluginAssociation, PluginSettingsView, RemoteStatus } from './types.js'
+import type { ClientReact, DirectHostStatus, PluginAssociation, PluginSettingsView, RemoteStatus } from './types.js'
+
+/** Mirrors DEFAULT_DIRECT_PORT in ../config.ts; the Host always reports its resolved value. */
+const DIRECT_PORT_FALLBACK = 47400
 
 export function createRemotePluginOptions(React: ClientReact) {
   function RemotePluginOptions(props: {
@@ -29,6 +33,10 @@ export function createRemotePluginOptions(React: ClientReact) {
     const [busy, setBusy] = React.useState(false)
     const [terminalEnabled, setTerminalEnabled] = React.useState(false)
     const [terminalBusy, setTerminalBusy] = React.useState(false)
+    const [directEnabled, setDirectEnabled] = React.useState(false)
+    const [directPort, setDirectPort] = React.useState(String(DIRECT_PORT_FALLBACK))
+    const [directStatus, setDirectStatus] = React.useState<DirectHostStatus | undefined>(undefined)
+    const [directBusy, setDirectBusy] = React.useState(false)
     const [acpBackends, setAcpBackends] = React.useState<Array<{ id: string; enabled: boolean }>>([])
     const [acpAvailability, setAcpAvailability] = React.useState<Record<string, boolean>>({})
     const [acpChecking, setAcpChecking] = React.useState<Record<string, boolean>>({})
@@ -51,6 +59,9 @@ export function createRemotePluginOptions(React: ClientReact) {
       setSettingsView(view)
       setServerUrl(view.config.serverUrl ?? 'https://dsh.r2049.cn')
       setTerminalEnabled(view.config.terminal?.enabled ?? true)
+      setDirectEnabled(view.config.direct?.enabled === true)
+      setDirectPort(String(view.config.direct?.port ?? DIRECT_PORT_FALLBACK))
+      setDirectStatus(view.direct)
       setRemoteToolsEnabled(view.config.remoteTools?.enabled ?? true)
       setAcpBackends((view.config.acp?.backends ?? []).map(item => ({ id: item.id, enabled: item.enabled !== false })))
       setAcpAvailability(view.acpAvailability ?? {})
@@ -173,6 +184,40 @@ export function createRemotePluginOptions(React: ClientReact) {
       finally { setRemoteToolsBusy(false) }
     }
 
+    const commitDirect = async (enabled: boolean, port: number, rollback: () => void): Promise<void> => {
+      setDirectBusy(true)
+      setError(undefined)
+      setNotice(undefined)
+      try {
+        const view = await props.control<PluginSettingsView>('settings.direct.set', { enabled, port })
+        applyView(view)
+        setNotice({ key: 'directSaved' })
+      } catch (reason) {
+        rollback()
+        setError(messageOf(reason))
+      } finally {
+        setDirectBusy(false)
+      }
+    }
+
+    const parsedDirectPort = (): number | undefined => {
+      const port = Number(directPort.trim())
+      return Number.isSafeInteger(port) && port >= 1024 && port <= 65535 ? port : undefined
+    }
+
+    const toggleDirect = (enabled: boolean): void => {
+      const port = parsedDirectPort()
+      if (port === undefined) { setError(t('directPortInvalid')); return }
+      setDirectEnabled(enabled)
+      void commitDirect(enabled, port, () => setDirectEnabled(!enabled))
+    }
+
+    const saveDirectPort = (): void => {
+      const port = parsedDirectPort()
+      if (port === undefined) { setError(t('directPortInvalid')); return }
+      void commitDirect(directEnabled, port, () => undefined)
+    }
+
     const checkAcp = async (backend: string): Promise<void> => {
       if (acpChecking[backend]) return
       setAcpChecking(current => ({ ...current, [backend]: true }))
@@ -243,6 +288,59 @@ export function createRemotePluginOptions(React: ClientReact) {
         }))),
         ))
 
+    const directErrorCode = directStatus?.error
+      ?? (directStatus?.tailscale.detected === false ? directStatus.tailscale.error ?? 'TAILSCALE_NOT_DETECTED' : undefined)
+    const directStatusText = directStatus === undefined
+      ? t('loadingSettings')
+      : directStatus.running
+        ? t('directRunning')
+        : t('directStopped')
+    const directSetting = React.createElement('section', { className: 'dshRemoteDevelopmentSettings dshRemoteDirectSettings' },
+      React.createElement('div', { className: 'dshRemoteAuthorizationSetting' },
+        React.createElement('div', null,
+          React.createElement('strong', null, t('directTailscale')),
+          React.createElement('p', null, t('directTailscaleHint')),
+          React.createElement('p', null, t('directAuthorizedHint'))),
+        React.createElement('input', {
+          type: 'checkbox', role: 'switch', checked: directEnabled,
+          disabled: busy || directBusy || !writable, 'aria-label': t('directTailscale'),
+          onChange: (event: Event) => toggleDirect((event.target as HTMLInputElement).checked),
+        })),
+      React.createElement('div', { className: 'dshRemotePathField' },
+        React.createElement('label', { htmlFor: 'dsh-remote-direct-port' }, t('directPort')),
+        React.createElement('div', { className: 'dshRemotePortsRow' },
+          React.createElement('input', {
+            id: 'dsh-remote-direct-port', type: 'number', min: 1024, max: 65535,
+            value: directPort, disabled: busy || directBusy || !writable,
+            onChange: (event: Event) => setDirectPort((event.target as HTMLInputElement).value),
+          }),
+          React.createElement('button', {
+            type: 'button',
+            disabled: busy || directBusy || !writable || directPort.trim() === '',
+            onClick: saveDirectPort,
+          }, t('directSave')))),
+      React.createElement('div', { className: 'dshRemoteDirectStatus' },
+        React.createElement('i', {
+          className: directStatus?.running ? 'isOn' : directErrorCode === undefined ? '' : 'isError',
+          'aria-hidden': true,
+        }),
+        React.createElement('span', null, directStatusText)),
+      !directEnabled || directStatus === undefined || !directStatus.running ? null : React.createElement('div', { className: 'dshRemotePathField' },
+        React.createElement('label', null, t('directEndpoints')),
+        directStatus.endpoints.length === 0
+          ? React.createElement('p', null, t('directNoEndpoints'))
+          : React.createElement('div', { className: 'dshRemoteDirectEndpointList' },
+            directStatus.endpoints.map(endpoint => React.createElement('input', {
+              key: endpoint, readOnly: true, value: endpoint, 'aria-label': t('directEndpoints'),
+              onFocus: (event: Event) => (event.target as HTMLInputElement).select(),
+            })))),
+      directStatus?.tailscale.detected === false && directStatus.tailscale.backendState !== undefined
+        ? React.createElement('p', { className: 'dshRemoteHint' }, t('directTailscaleBackend', { state: directStatus.tailscale.backendState }))
+        : null,
+      directErrorCode === undefined
+        ? null
+        : React.createElement('p', { className: 'dshRemoteError', role: 'status' }, directStatusErrorLabel(directErrorCode, t)))
+
     if (props.view === 'summary') return React.createElement('span', null, t('pluginDescription'))
 
     return React.createElement(props.view === 'page' ? 'div' : 'li', { className: `dshRemotePluginCard${open ? ' isOpen' : ''}${props.view === 'page' ? ' dshRemotePluginModern' : ''}` },
@@ -282,6 +380,7 @@ export function createRemotePluginOptions(React: ClientReact) {
                   React.createElement('span', null, t('deviceId')),
                   React.createElement('code', null, hostDeviceId || '—'))),
               developmentSetting,
+              directSetting,
               acpSetting,
               React.createElement('div', { className: 'dshRemoteAuthorizationSetting' },
                 React.createElement('div', null,
@@ -337,6 +436,7 @@ export function createRemotePluginOptions(React: ClientReact) {
                   React.createElement('span', null, t('deviceId')),
                   React.createElement('code', null, hostDeviceId || '—'))),
               developmentSetting,
+              directSetting,
               acpSetting,
               React.createElement('div', { className: 'dshRemoteSettingsSignIn' },
                 React.createElement('p', { className: 'dshRemoteSettingsState' }, t('authorizeFromRemote')),

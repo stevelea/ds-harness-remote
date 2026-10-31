@@ -93,7 +93,9 @@ export function createRemoteSessionHeaderAction(React: ClientReact) {
       }
     }
     const transport = status.network?.webRtc?.mode ?? status.transport ?? 'Disconnected'
-    const networkLabel = transport === 'P2P'
+    const networkLabel = transport === 'Direct'
+      ? t('remoteNetworkDirect')
+      : transport === 'P2P'
       ? t('remoteNetworkP2p')
       : transport === 'TURN'
         ? t('remoteNetworkTurn')
@@ -103,14 +105,18 @@ export function createRemoteSessionHeaderAction(React: ClientReact) {
             ? t('remoteNetworkLan')
             : t('remoteNetworkOffline')
     const networkOnline = status.connected === true && transport !== 'Disconnected'
-    const routeVia = transport === 'P2P'
+    const routeVia = transport === 'Direct'
+      ? t('connectionRouteDirect')
+      : transport === 'P2P'
       ? t('connectionRouteP2p')
       : transport === 'TURN'
         ? t('connectionRouteTurn')
         : transport === 'Relay'
           ? t('connectionRouteRelay')
           : t('connectionRouteLan')
-    const routeViaDetail = transport === 'P2P'
+    const routeViaDetail = transport === 'Direct'
+      ? t('connectionRouteDirectDetail')
+      : transport === 'P2P'
       ? t('connectionRouteP2pDetail')
       : transport === 'TURN'
         ? t('connectionRouteTurnDetail')
