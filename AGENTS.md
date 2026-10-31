@@ -826,7 +826,11 @@ WireGuard 保护链路、Noise 保护业务；`wss://` 仅用于自建 TLS 终�
 Server Relay 或明文，也禁止把 Direct 端点/身份密钥写入日志。
 
 验证：`packages/protocol/tests/direct-frame.test.ts`、`packages/webrtc/tests/direct-transport.test.ts`、
-`packages/plugin/tests/direct-tailscale.test.ts`、`packages/plugin/tests/direct-host-listener.test.ts`
-覆盖 frame 校验、hello/ready 协商、真实 WebSocket + Noise IK、未授权 Client 拒绝、pinned key
-不匹配、非法 frame 关闭与 Tailscale 未检测状态。尚未验证：真实双机 Tailscale E2E、Desktop/
-Android UI 流程、Windows/Linux 绑定、长期 idle/重连；不得把本机自动化验证当作跨设备验收。
+`packages/plugin/tests/direct-tailscale.test.ts`、`direct-host-listener.test.ts`、
+`direct-runtime-e2e.test.ts` 覆盖 frame 校验、hello/ready 协商、真实 WebSocket + Noise IK、未授权
+Client 拒绝、pinned key 不匹配、非法 frame 关闭、Tailscale 未检测状态，以及 Client runtime →
+Host `ConnectionController` 的真实 RPC E2E。本轮 `pnpm -r check` 与 `pnpm -r test` 通过（Plugin
+69 文件 / 501 tests、Android 44 / 278、webrtc 64、client-core 47），插件 bundle 重建后
+`node scripts/verify-dsh-plugin.mjs` 通过（0.6.0），`git diff --check` 通过。尚未验证：真实双机
+Tailscale E2E、Desktop/Android 图形界面与真机、Windows/Linux 绑定、长期 idle/重连；不得把本机
+自动化验证当作跨设备验收。
